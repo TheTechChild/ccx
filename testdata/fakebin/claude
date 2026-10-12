@@ -1,12 +1,46 @@
 #!/usr/bin/env perl
-# Fake `claude` for end-to-end tests. It prints its program path, its
-# arguments and its environment as one JSON object, then exits 0.
+# Fake `claude` for end-to-end tests.
+#
+# - `claude auth status --json` prints a synthetic login status. The email
+#   is "main@example.com" when CLAUDE_CONFIG_DIR is not set. Otherwise it is
+#   "<suffix>@example.com", where the dir name is ".claude-<suffix>".
+#   A dir name that contains "loggedout" gives `"loggedIn": false`.
+# - All other calls print the program path, the arguments and the
+#   environment as one JSON object, then exit 0.
+# - When FAKE_CLAUDE_LOG is set, each call also appends that JSON object
+#   as one line to the file FAKE_CLAUDE_LOG.
 use strict;
 use warnings;
 use JSON::PP;
 
-print JSON::PP->new->canonical->encode({
+my $json = JSON::PP->new->canonical;
+my $record = $json->encode({
     program => $0,
     argv    => \@ARGV,
     env     => \%ENV,
-}), "\n";
+});
+
+if (my $log = $ENV{FAKE_CLAUDE_LOG}) {
+    open(my $fh, '>>', $log) or die "cannot open $log: $!";
+    print $fh $record, "\n";
+    close($fh);
+}
+
+if ("@ARGV" eq "auth status --json") {
+    my $dir = $ENV{CLAUDE_CONFIG_DIR} // '';
+    my ($name) = $dir =~ m{/\.claude-([^/]+)$};
+    $name = 'main' if $dir eq '';
+    if ($dir =~ /loggedout/ || !defined $name) {
+        print $json->encode({ loggedIn => JSON::PP::false }), "\n";
+        exit 1;
+    }
+    print $json->encode({
+        loggedIn         => JSON::PP::true,
+        authMethod       => 'claude.ai',
+        email            => "$name\@example.com",
+        subscriptionType => 'max',
+    }), "\n";
+    exit 0;
+}
+
+print $record, "\n";

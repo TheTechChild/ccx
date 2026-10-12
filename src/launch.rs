@@ -196,11 +196,15 @@ pub fn build_env(parent: &Env, account: &Account, depth: u32) -> (Env, Vec<&'sta
     (env, removed)
 }
 
-/// Finds `claude`: `launch.claude_bin`, `$CCX_CLAUDE_BIN`, PATH, then the
+/// Finds `claude`: `claude_bin` (from `launch.claude_bin`), `$CCX_CLAUDE_BIN`, PATH, then the
 /// fallback dirs. The search skips `self_exe` (ccx itself).
-pub fn find_claude(config: &Config, env: &Env, self_exe: Option<&Path>) -> Option<PathBuf> {
-    if let Some(bin) = &config.launch.claude_bin {
-        return Some(bin.clone());
+pub fn find_claude(
+    claude_bin: Option<&Path>,
+    env: &Env,
+    self_exe: Option<&Path>,
+) -> Option<PathBuf> {
+    if let Some(bin) = claude_bin {
+        return Some(bin.to_path_buf());
     }
     if let Some(bin) = env.get("CCX_CLAUDE_BIN") {
         return Some(PathBuf::from(bin));
@@ -540,22 +544,25 @@ mod tests {
         let mut config = config();
 
         // PATH: skip the link to ccx and the file that is not executable.
-        assert_eq!(find_claude(&config, &env, Some(&me)), Some(real.clone()));
+        assert_eq!(
+            find_claude(config.launch.claude_bin.as_deref(), &env, Some(&me)),
+            Some(real.clone())
+        );
         // Without ccx itself known, the link is a valid claude.
         assert_eq!(
-            find_claude(&config, &env, None),
+            find_claude(config.launch.claude_bin.as_deref(), &env, None),
             Some(link_dir.join("claude"))
         );
 
         env.set("CCX_CLAUDE_BIN", "/env/claude");
         assert_eq!(
-            find_claude(&config, &env, Some(&me)),
+            find_claude(config.launch.claude_bin.as_deref(), &env, Some(&me)),
             Some(PathBuf::from("/env/claude"))
         );
 
         config.launch.claude_bin = Some(PathBuf::from("/config/claude"));
         assert_eq!(
-            find_claude(&config, &env, Some(&me)),
+            find_claude(config.launch.claude_bin.as_deref(), &env, Some(&me)),
             Some(PathBuf::from("/config/claude"))
         );
     }

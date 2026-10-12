@@ -1,6 +1,8 @@
+mod adopt;
 mod config;
 mod env;
 mod launch;
+mod list;
 mod paths;
 
 use std::ffi::OsString;
@@ -30,14 +32,34 @@ struct Cli {
 /// The commands that ccx keeps for itself (the reserved first words).
 #[derive(Debug, Subcommand)]
 enum Own {
-    /// Manage accounts (not ready yet).
-    Manage(Rest),
+    /// Manage accounts.
+    Manage {
+        #[command(subcommand)]
+        command: Manage,
+    },
     /// Show the usage of each account (not ready yet).
     Status(Rest),
     /// Fetch and show usage (not ready yet).
     Usage(Rest),
     /// Move a session to a different account (not ready yet).
     Handoff(Rest),
+}
+
+/// `ccx manage` commands.
+#[derive(Debug, Subcommand)]
+enum Manage {
+    /// Find the accounts on this machine and write them into the config.
+    Adopt {
+        /// Confirm the changes without a prompt.
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// Show each configured account.
+    List {
+        /// Print stable JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, clap::Args)]
@@ -71,7 +93,14 @@ fn run(args: Vec<OsString>) -> config::Result<ExitCode> {
 fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
     let cli = Cli::parse_from(std::iter::once(OsString::from("ccx")).chain(args));
     let word = match cli.command {
-        Own::Manage(_) => "manage",
+        Own::Manage { command } => {
+            let env = Env::from_process();
+            match command {
+                Manage::Adopt { yes } => adopt::run(&env, yes)?,
+                Manage::List { json } => list::run(&env, json)?,
+            }
+            return Ok(ExitCode::SUCCESS);
+        }
         Own::Status(_) => "status",
         Own::Usage(_) => "usage",
         Own::Handoff(_) => "handoff",
@@ -101,7 +130,11 @@ fn run_launch(
     };
     let (env, removed) = launch::build_env(&parent, account, depth);
     let self_exe = std::env::current_exe().ok();
-    let claude = launch::find_claude(&config, &parent, self_exe.as_deref());
+    let claude = launch::find_claude(
+        config.launch.claude_bin.as_deref(),
+        &parent,
+        self_exe.as_deref(),
+    );
 
     // Banner and warnings only on a terminal, so pipes stay clean.
     let tty = std::io::stdout().is_terminal() && std::io::stderr().is_terminal();
