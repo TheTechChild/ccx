@@ -1,0 +1,185 @@
+# ccx shell-init (zsh). Generated; do not edit.
+#compdef ccx
+
+autoload -U is-at-least
+
+_ccx() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" : \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'-V[Print version]' \
+'--version[Print version]' \
+":: :_ccx_commands" \
+"*::: :->ccx" \
+&& ret=0
+    case $state in
+    (ccx)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:ccx-command-$line[1]:"
+        case $line[1] in
+            (manage)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_ccx__subcmd__manage_commands" \
+"*::: :->manage" \
+&& ret=0
+
+    case $state in
+    (manage)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:ccx-manage-command-$line[1]:"
+        case $line[1] in
+            (adopt)
+_arguments "${_arguments_options[@]}" : \
+'-y[Confirm the changes without a prompt]' \
+'--yes[Confirm the changes without a prompt]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--json[Print stable JSON]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(shell-init)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':shell -- The shell:(zsh bash fish)' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+'*::args:_default' \
+&& ret=0
+;;
+(usage)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+'*::args:_default' \
+&& ret=0
+;;
+(handoff)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+'*::args:_default' \
+&& ret=0
+;;
+(@angel2)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(@lab)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(@main)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+}
+
+(( $+functions[_ccx_commands] )) ||
+_ccx_commands() {
+    local commands; commands=(
+'manage:Manage accounts' \
+'status:Show the usage of each account (not ready yet)' \
+'usage:Fetch and show usage (not ready yet)' \
+'handoff:Move a session to a different account (not ready yet)' \
+'@angel2:Start claude as account angel2' \
+'@lab:Start claude as account lab' \
+'@main:Start claude as account main' \
+    )
+    _describe -t commands 'ccx commands' commands "$@"
+}
+(( $+functions[_ccx__subcmd__@angel2_commands] )) ||
+_ccx__subcmd__@angel2_commands() {
+    local commands; commands=()
+    _describe -t commands 'ccx @angel2 commands' commands "$@"
+}
+(( $+functions[_ccx__subcmd__@lab_commands] )) ||
+_ccx__subcmd__@lab_commands() {
+    local commands; commands=()
+    _describe -t commands 'ccx @lab commands' commands "$@"
+}
+(( $+functions[_ccx__subcmd__@main_commands] )) ||
+_ccx__subcmd__@main_commands() {
+    local commands; commands=()
+    _describe -t commands 'ccx @main commands' commands "$@"
+}
+(( $+functions[_ccx__subcmd__handoff_commands] )) ||
+_ccx__subcmd__handoff_commands() {
+    local commands; commands=()
+    _describe -t commands 'ccx handoff commands' commands "$@"
+}
+(( $+functions[_ccx__subcmd__manage_commands] )) ||
+_ccx__subcmd__manage_commands() {
+    local commands; commands=(
+'adopt:Find the accounts on this machine and write them into the config' \
+'list:Show each configured account' \
+'shell-init:Print shell code for the profile\: completions and account aliases' \
+    )
+    _describe -t commands 'ccx manage commands' commands "$@"
+}
+(( $+functions[_ccx__subcmd__manage__subcmd__adopt_commands] )) ||
+_ccx__subcmd__manage__subcmd__adopt_commands() {
+    local commands; commands=()
+    _describe -t commands 'ccx manage adopt commands' commands "$@"
+}
+(( $+functions[_ccx__subcmd__manage__subcmd__list_commands] )) ||
+_ccx__subcmd__manage__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'ccx manage list commands' commands "$@"
+}
+(( $+functions[_ccx__subcmd__manage__subcmd__shell-init_commands] )) ||
+_ccx__subcmd__manage__subcmd__shell-init_commands() {
+    local commands; commands=()
+    _describe -t commands 'ccx manage shell-init commands' commands "$@"
+}
+(( $+functions[_ccx__subcmd__status_commands] )) ||
+_ccx__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'ccx status commands' commands "$@"
+}
+(( $+functions[_ccx__subcmd__usage_commands] )) ||
+_ccx__subcmd__usage_commands() {
+    local commands; commands=()
+    _describe -t commands 'ccx usage commands' commands "$@"
+}
+
+if [ "$funcstack[1]" = "_ccx" ]; then
+    _ccx "$@"
+else
+    (( $+functions[compdef] )) && compdef _ccx ccx
+fi
+alias claude2='ccx @angel2'
+alias cl_lab='ccx @lab'
+alias c3='ccx @lab'

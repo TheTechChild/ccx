@@ -23,6 +23,13 @@ jobs:
           fetch-depth: 0
           # Check out the PR head, not the merge commit that GitHub makes.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      # The shell-init tests source the output in real shells.
+      - name: Install zsh and fish (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zsh fish
       - uses: jdx/mise-action@v3
       - uses: Swatinem/rust-cache@v2
       - run: mise run ci
+        env:
+          # A shell in this list must be present, or the shell-init tests fail.
+          CCX_TEST_SHELLS: ${{ runner.os == 'Linux' && 'zsh,bash,fish' || 'zsh,bash' }}
