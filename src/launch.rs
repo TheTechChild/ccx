@@ -1,5 +1,8 @@
 //! The launch path: `ccx [@name] [claude args...]`.
 //!
+//! A claude subcommand (`ccx [@name] auth ...`) uses the same path, but
+//! ccx never selects its account by usage.
+//!
 //! Keep this path fast. It reads the config, builds the environment, finds
 //! `claude` and replaces the ccx process with it.
 
@@ -13,6 +16,38 @@ use crate::env::Env;
 
 /// The first words that ccx keeps for itself.
 pub const RESERVED: [&str; 4] = ["manage", "status", "usage", "handoff"];
+
+/// Claude Code subcommands (with aliases) that change one account. ccx never
+/// picks an account for them by usage: they run in `@name`, in
+/// `CCX_ACCOUNT`, or in the base account.
+///
+/// Source: the `Commands:` section of `claude --help`, Claude Code 2.1.296.
+/// To update: compare this list with the `Commands:` section of
+/// `claude --help` for the new version, then change the version above.
+/// `config` is not a claude subcommand. Do not add it.
+pub const CLAUDE_SUBCOMMANDS: [&str; 21] = [
+    "agents",
+    "attach",
+    "auth",
+    "auto-mode",
+    "doctor",
+    "gateway",
+    "import",
+    "install",
+    "logs",
+    "mcp",
+    "plugin",
+    "plugins",
+    "purge",
+    "respawn",
+    "rm",
+    "setup-token",
+    "stop",
+    "kill",
+    "ultrareview",
+    "update",
+    "upgrade",
+];
 
 /// Variables that override the account login. ccx removes them.
 pub const STRIPPED: [&str; 4] = [
@@ -34,26 +69,39 @@ pub enum Invocation {
     /// A ccx command: a reserved first word, or `--version` alone.
     Own,
     /// Launch claude. `account` is the name after `@`, if there is one.
+    /// `subcommand` is the claude subcommand in the first claude argument.
     Launch {
         account: Option<String>,
         args: Vec<OsString>,
+        subcommand: Option<&'static str>,
     },
+}
+
+impl Invocation {
+    fn launch(account: Option<String>, args: Vec<OsString>) -> Self {
+        let subcommand = claude_subcommand(&args);
+        Invocation::Launch {
+            account,
+            args,
+            subcommand,
+        }
+    }
+}
+
+/// The claude subcommand when it is the first claude argument.
+pub fn claude_subcommand(args: &[OsString]) -> Option<&'static str> {
+    let first = args.first()?.to_str()?;
+    CLAUDE_SUBCOMMANDS.into_iter().find(|word| *word == first)
 }
 
 /// Splits the command line (without the program name).
 pub fn parse_args(mut args: Vec<OsString>) -> Result<Invocation> {
     let Some(first) = args.first().and_then(|a| a.to_str()) else {
-        return Ok(Invocation::Launch {
-            account: None,
-            args,
-        });
+        return Ok(Invocation::launch(None, args));
     };
     if first == "--" {
         args.remove(0);
-        return Ok(Invocation::Launch {
-            account: None,
-            args,
-        });
+        return Ok(Invocation::launch(None, args));
     }
     if RESERVED.contains(&first) || (args.len() == 1 && matches!(first, "--version" | "-V")) {
         return Ok(Invocation::Own);
@@ -64,34 +112,53 @@ pub fn parse_args(mut args: Vec<OsString>) -> Result<Invocation> {
         }
         let account = Some(name.to_string());
         args.remove(0);
-        return Ok(Invocation::Launch { account, args });
+        return Ok(Invocation::launch(account, args));
     }
-    Ok(Invocation::Launch {
-        account: None,
-        args,
-    })
+    Ok(Invocation::launch(None, args))
 }
 
-/// Finds the account: `@name`, else `$CCX_ACCOUNT`, else the base account.
-/// ccx never reads `CCX_ACTIVE` here.
-pub fn choose_account<'a>(
+/// How ccx gets the account for a launch.
+#[derive(Debug, PartialEq)]
+pub enum Pick<'a> {
+    /// `@name` or `$CCX_ACCOUNT` names the account.
+    Named(&'a Account),
+    /// A claude subcommand with no name: always the base account.
+    Base(&'a Account),
+    /// A session with no name: automatic selection. Only this variant can
+    /// start a usage fetch or the picker.
+    Auto,
+}
+
+/// Finds the account: `@name`, else `$CCX_ACCOUNT`, else the base account
+/// for a claude subcommand, else automatic selection. ccx never reads
+/// `CCX_ACTIVE` here.
+pub fn pick_account<'a>(
     config: &'a Config,
     name: Option<&str>,
+    subcommand: Option<&str>,
     env: &Env,
-) -> Result<&'a Account> {
-    let name = match name {
-        Some(name) => name.to_string(),
-        None => match env.get("CCX_ACCOUNT") {
-            Some(value) => value.to_string_lossy().into_owned(),
-            None => return Ok(config.base()),
-        },
+) -> Result<Pick<'a>> {
+    let name = match (name, env.get("CCX_ACCOUNT")) {
+        (Some(name), _) => name.to_string(),
+        (None, Some(value)) => value.to_string_lossy().into_owned(),
+        (None, None) if subcommand.is_some() => return Ok(Pick::Base(config.base())),
+        (None, None) => return Ok(Pick::Auto),
     };
-    config.account(&name).ok_or_else(|| {
+    let account = config.account(&name).ok_or_else(|| {
         format!(
             "unknown account `{name}`; known accounts: {}",
             config.names().join(", ")
         )
-    })
+    })?;
+    Ok(Pick::Named(account))
+}
+
+/// The note that a claude subcommand with no name runs on the base account.
+pub fn base_note(subcommand: &str, base: &Account) -> String {
+    format!(
+        "ccx: '{subcommand}' runs on base account {}; use @name for another account",
+        base.name
+    )
 }
 
 /// Reads `CCX_DEPTH` and fails at the limit. Returns the current depth.
@@ -237,7 +304,73 @@ mod tests {
         Invocation::Launch {
             account: account.map(String::from),
             args: os(args),
+            subcommand: None,
         }
+    }
+
+    fn routed(account: Option<&str>, args: &[&str], word: &'static str) -> Invocation {
+        Invocation::Launch {
+            account: account.map(String::from),
+            args: os(args),
+            subcommand: Some(word),
+        }
+    }
+
+    #[test]
+    fn subcommand_list_has_21_unique_words_and_no_config() {
+        let mut words = CLAUDE_SUBCOMMANDS.to_vec();
+        words.sort_unstable();
+        words.dedup();
+        assert_eq!(words.len(), 21);
+        assert!(!CLAUDE_SUBCOMMANDS.contains(&"config"));
+        for word in CLAUDE_SUBCOMMANDS {
+            assert!(!RESERVED.contains(&word), "{word} is a ccx word");
+        }
+    }
+
+    #[test]
+    fn each_subcommand_is_found_only_as_the_first_claude_argument() {
+        for word in CLAUDE_SUBCOMMANDS {
+            assert_eq!(
+                parse_args(os(&[word, "x"])).unwrap(),
+                routed(None, &[word, "x"], word)
+            );
+            assert_eq!(
+                parse_args(os(&["@angel2", word])).unwrap(),
+                routed(Some("angel2"), &[word], word)
+            );
+            assert_eq!(
+                parse_args(os(&["--", word, "x"])).unwrap(),
+                routed(None, &[word, "x"], word)
+            );
+            for args in [&["-p", word][..], &["--model", "opus", word], &["x", word]] {
+                assert_eq!(parse_args(os(args)).unwrap(), launch(None, args));
+            }
+            assert_eq!(
+                parse_args(os(&["@angel2", "-p", word])).unwrap(),
+                launch(Some("angel2"), &["-p", word])
+            );
+        }
+        // Case and prefixes do not match.
+        for args in [&["Auth"][..], &["auth-x"], &["--auth"]] {
+            assert_eq!(parse_args(os(args)).unwrap(), launch(None, args));
+        }
+    }
+
+    #[test]
+    fn config_goes_to_the_normal_launch_path() {
+        assert_eq!(
+            parse_args(os(&["config"])).unwrap(),
+            launch(None, &["config"])
+        );
+        let config = config();
+        let pick = pick_account(
+            &config,
+            None,
+            claude_subcommand(&os(&["config"])),
+            &Env::default(),
+        );
+        assert_eq!(pick.unwrap(), Pick::Auto);
     }
 
     #[test]
@@ -270,23 +403,70 @@ mod tests {
     }
 
     #[test]
-    fn choose_account_order() {
+    fn pick_account_order() {
         let config = config();
+        let main = config.account("main").unwrap();
+        let angel2 = config.account("angel2").unwrap();
         let none = Env::default();
         let forced: Env = [("CCX_ACCOUNT", "angel2")].into_iter().collect();
         let active: Env = [("CCX_ACTIVE", "angel2")].into_iter().collect();
-        assert_eq!(choose_account(&config, None, &none).unwrap().name, "main");
+        let pick = |name, sub, env| pick_account(&config, name, sub, env).unwrap();
+
+        assert_eq!(pick(None, None, &none), Pick::Auto);
+        assert_eq!(pick(None, None, &active), Pick::Auto);
+        assert_eq!(pick(None, None, &forced), Pick::Named(angel2));
+        assert_eq!(pick(Some("main"), None, &forced), Pick::Named(main));
+        assert_eq!(pick(None, Some("auth"), &none), Pick::Base(main));
+        assert_eq!(pick(None, Some("auth"), &active), Pick::Base(main));
+        assert_eq!(pick(None, Some("plugin"), &forced), Pick::Named(angel2));
         assert_eq!(
-            choose_account(&config, None, &forced).unwrap().name,
-            "angel2"
+            pick(Some("angel2"), Some("mcp"), &none),
+            Pick::Named(angel2)
         );
-        assert_eq!(
-            choose_account(&config, Some("main"), &forced).unwrap().name,
-            "main"
-        );
-        assert_eq!(choose_account(&config, None, &active).unwrap().name, "main");
-        let err = choose_account(&config, Some("nope"), &none).unwrap_err();
+        assert_eq!(pick(Some("main"), Some("mcp"), &forced), Pick::Named(main));
+
+        let err = pick_account(&config, Some("nope"), None, &none).unwrap_err();
         assert_eq!(err, "unknown account `nope`; known accounts: angel2, main");
+        let err = pick_account(&config, Some("nope"), Some("auth"), &none).unwrap_err();
+        assert!(err.contains("unknown account `nope`"));
+    }
+
+    /// `Pick::Auto` is the only way to the usage fetch and the picker.
+    /// A claude subcommand never gets it, with or without a name.
+    #[test]
+    fn subcommands_never_reach_automatic_selection() {
+        let config = config();
+        let envs: [Env; 3] = [
+            Env::default(),
+            [("CCX_ACCOUNT", "angel2")].into_iter().collect(),
+            [("CCX_ACTIVE", "angel2")].into_iter().collect(),
+        ];
+        for word in CLAUDE_SUBCOMMANDS {
+            for args in [&[word, "x"][..], &["--", word], &["@angel2", word]] {
+                let Invocation::Launch {
+                    account,
+                    subcommand,
+                    ..
+                } = parse_args(os(args)).unwrap()
+                else {
+                    panic!("{args:?} is not a launch");
+                };
+                assert_eq!(subcommand, Some(word));
+                for env in &envs {
+                    let pick = pick_account(&config, account.as_deref(), subcommand, env);
+                    assert_ne!(pick.unwrap(), Pick::Auto, "{args:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn base_note_text() {
+        let config = config();
+        assert_eq!(
+            base_note("auth", config.base()),
+            "ccx: 'auth' runs on base account main; use @name for another account"
+        );
     }
 
     #[test]

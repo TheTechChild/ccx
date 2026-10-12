@@ -415,3 +415,92 @@ fn ccx_config_and_xdg_config_home_are_used() {
     );
     assert_eq!(json["env"]["CCX_ACTIVE"], "solo");
 }
+
+const BASE_NOTE: &str = "ccx: 'auth' runs on base account main; use @name for another account";
+
+#[test]
+fn subcommand_without_name_runs_on_the_base_account() {
+    let fx = Fixture::new();
+    let out = fx
+        .ccx(&["auth", "status"])
+        .env("CLAUDE_CONFIG_DIR", "/somewhere/else")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(json["env"].get("CLAUDE_CONFIG_DIR").is_none());
+    assert_eq!(json["env"]["CCX_ACTIVE"], "main");
+    assert_eq!(argv(&json), ["auth", "status"]);
+    // No note when stderr is not a TTY.
+    assert_eq!(stderr(&out), "");
+}
+
+#[test]
+fn subcommand_with_name_runs_in_that_account() {
+    let fx = Fixture::new();
+    let json = launched(fx.ccx(&["@angel2", "mcp", "list"]));
+    let want_dir = format!("{}/.claude-angel2", fx.home().display());
+    assert_eq!(json["env"]["CLAUDE_CONFIG_DIR"], want_dir.as_str());
+    assert_eq!(json["env"]["CCX_ACTIVE"], "angel2");
+    assert_eq!(argv(&json), ["mcp", "list"]);
+}
+
+#[test]
+fn ccx_account_selects_the_account_for_a_subcommand() {
+    let fx = Fixture::new();
+    let json = launched(fx.ccx(&["plugin", "list"]).env("CCX_ACCOUNT", "angel2"));
+    let want_dir = format!("{}/.claude-angel2", fx.home().display());
+    assert_eq!(json["env"]["CLAUDE_CONFIG_DIR"], want_dir.as_str());
+    assert_eq!(json["env"]["CCX_ACTIVE"], "angel2");
+    assert_eq!(argv(&json), ["plugin", "list"]);
+}
+
+#[test]
+fn double_dash_subcommand_follows_the_same_rule() {
+    let fx = Fixture::new();
+    let json = launched(
+        fx.ccx(&["--", "auth", "status"])
+            .env("CLAUDE_CONFIG_DIR", "/somewhere/else"),
+    );
+    assert_eq!(argv(&json), ["auth", "status"]);
+    assert!(json["env"].get("CLAUDE_CONFIG_DIR").is_none());
+    assert_eq!(json["env"]["CCX_ACTIVE"], "main");
+
+    let output = on_tty(&mut fx.ccx(&[]), &["--", "auth", "status"]);
+    assert_eq!(output.matches(BASE_NOTE).count(), 1, "{output}");
+}
+
+#[test]
+fn base_note_shows_only_on_a_tty_and_only_without_a_name() {
+    let fx = Fixture::new();
+    let output = on_tty(&mut fx.ccx(&[]), &["auth", "status"]);
+    assert_eq!(output.matches(BASE_NOTE).count(), 1, "{output}");
+    assert!(output.contains("\"argv\""), "{output}");
+
+    for args in [
+        &["@main", "auth", "status"][..],
+        &["config"],
+        &["-p", "auth"],
+    ] {
+        let output = on_tty(&mut fx.ccx(&[]), args);
+        assert!(
+            !output.contains("runs on base account"),
+            "{args:?}: {output}"
+        );
+    }
+    let output = on_tty(
+        fx.ccx(&[]).env("CCX_ACCOUNT", "angel2"),
+        &["auth", "status"],
+    );
+    assert!(!output.contains("runs on base account"), "{output}");
+}
+
+#[test]
+fn config_is_not_a_subcommand() {
+    let fx = Fixture::new();
+    let out = fx.ccx(&["config"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(argv(&json), ["config"]);
+    assert_eq!(json["env"]["CCX_ACTIVE"], "main");
+}
