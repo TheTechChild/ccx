@@ -16,7 +16,7 @@ use crate::paths::canonical;
 pub type Result<T> = std::result::Result<T, String>;
 
 /// The directory of the base account, before canonicalization.
-const BASE_DIR: &str = "~/.claude";
+pub const BASE_DIR: &str = "~/.claude";
 /// The only email domain that `config.toml` can contain.
 const PLACEHOLDER_DOMAIN: &str = "@example.com";
 

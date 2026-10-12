@@ -2,7 +2,7 @@
 
 ccx is a command-line tool. It starts Claude Code on the account that has the most usage available.
 
-> **Status:** Work in progress. ccx starts Claude Code on an account that you name. Automatic selection is not available yet. Refer to [PLAN.md](PLAN.md) for the plan.
+> **Status:** Work in progress. ccx starts Claude Code on an account that you name. `ccx manage adopt` and `ccx manage list` are available. Automatic selection is not available yet. Refer to [PLAN.md](PLAN.md) for the plan.
 
 ## Usage
 
@@ -23,6 +23,36 @@ Some `claude` subcommands change one account, for example `auth`, `mcp`, `plugin
 3. The base account: `ccx auth status` runs the subcommand in `~/.claude`, with `CLAUDE_CONFIG_DIR` unset. When stderr is a terminal, ccx shows one note on stderr.
 
 ccx finds a subcommand only in the first `claude` argument. `ccx -p "auth"` is a normal launch. `ccx -- auth status` follows the same rule as `ccx auth status`. The list of subcommands is `CLAUDE_SUBCOMMANDS` in `src/launch.rs`. It comes from the `Commands:` section of `claude --help`. `config` is not a `claude` subcommand.
+
+## Manage accounts
+
+### Adopt the accounts on this machine
+
+```sh
+ccx manage adopt      # Show the plan, then ask for confirmation.
+ccx manage adopt -y   # Do not ask. Use this in scripts.
+```
+
+`ccx manage adopt` finds `~/.claude` (the base account, name `main`) and each `~/.claude-<name>` directory. For each directory, it runs `claude auth status --json` to get the email. For the base account, `CLAUDE_CONFIG_DIR` is not set. For the other accounts, `CLAUDE_CONFIG_DIR` is the directory of the account.
+
+Adopt shows the plan and writes nothing until you confirm. When there is no terminal and you do not give `-y`, adopt stops and writes nothing.
+
+After you confirm, adopt does these steps:
+
+1. It adds each new account to `config.toml` with its `dir`. `config.toml` gets no email addresses.
+2. It writes the email addresses only to `config.local.toml`, with mode 0600.
+3. It moves the stray files `~/.claude/.claude.json` and `~/.claude/.claude.json.lock` to a backup directory and shows the path. Adopt never deletes these files. The backup directory is `$XDG_STATE_HOME/ccx/backup/adopt-<time>`, or `~/.local/state/ccx/backup/adopt-<time>`.
+
+Adopt keeps the other entries and the comments in a file that exists. It writes each file to a temporary file and then renames it. When `config.toml` is a symlink, adopt keeps the symlink and changes the target file. Adopt always writes `config.local.toml` at the overlay path, never next to the symlink target.
+
+You can run adopt again. It adds only the accounts and the emails that are not in the config.
+
+### List the accounts
+
+```sh
+ccx manage list          # Show a table: name, directory, email and aliases.
+ccx manage list --json   # Show stable JSON for scripts.
+```
 
 ## Configuration
 
