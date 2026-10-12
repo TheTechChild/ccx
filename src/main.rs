@@ -4,13 +4,14 @@ mod env;
 mod launch;
 mod list;
 mod paths;
+mod shell_init;
 
 use std::ffi::OsString;
 use std::io::IsTerminal;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitCode};
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 use crate::env::Env;
 use crate::launch::{Invocation, Pick};
@@ -23,7 +24,7 @@ const EXIT_EXEC_FAILED: u8 = 127;
 /// `ccx [@name] [claude args...]` starts claude. ccx passes all arguments
 /// after `@name` to claude. `ccx -- args...` passes all arguments.
 #[derive(Debug, Parser)]
-#[command(name = "ccx", version, about)]
+#[command(name = "ccx", version, about, disable_help_subcommand = true)]
 struct Cli {
     #[command(subcommand)]
     command: Own,
@@ -59,6 +60,16 @@ enum Manage {
         /// Print stable JSON.
         #[arg(long)]
         json: bool,
+    },
+    /// Print shell code for the profile: completions and account aliases.
+    ///
+    /// Add one line to the shell profile, for example
+    /// `eval "$(ccx manage shell-init zsh)"`, or for fish
+    /// `ccx manage shell-init fish | source`.
+    ShellInit {
+        /// The shell.
+        #[arg(value_enum)]
+        shell: shell_init::Shell,
     },
 }
 
@@ -98,6 +109,7 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
             match command {
                 Manage::Adopt { yes } => adopt::run(&env, yes)?,
                 Manage::List { json } => list::run(&env, json)?,
+                Manage::ShellInit { shell } => shell_init::run(&env, shell, Cli::command())?,
             }
             return Ok(ExitCode::SUCCESS);
         }
@@ -176,7 +188,6 @@ fn auto_select(config: &config::Config) -> &config::Account {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::CommandFactory;
 
     #[test]
     fn cli_definition_is_valid() {
