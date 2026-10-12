@@ -38,6 +38,8 @@ Follow-up issues: #21 (TUI wizards), #22 (adaptive refresh interval), #23 (direc
 - [ADR 0002](docs/adr/0002-no-credential-access.md): ccx never reads, keeps or refreshes Claude Code credentials. All logins go through `claude auth login`.
 - [ADR 0003](docs/adr/0003-link-all-sharing.md): the sharing model is "link all".
 - [ADR 0004](docs/adr/0004-usage-source.md): the usage source is `claude -p "/usage" --output-format stream-json`, with `cachedUsageUtilization` as the fallback.
+- [ADR 0005](docs/adr/0005-m0-usage-hooks-off.md): M0 test 1. Hooks stay off for the `/usage` fetch.
+- [ADR 0006](docs/adr/0006-m0-session-file-layout.md): M0 test 4. The session file layout and the cwd encoding rule.
 
 ## Decisions from the grilling session
 
@@ -64,6 +66,14 @@ Follow-up issues: #21 (TUI wizards), #22 (adaptive refresh interval), #23 (direc
 5. **Merge:** merge the pull request when CI is green. Then start the next issue.
 6. **Privacy rule:** do not put a real email address in the repository, an issue, a pull request, a fixture or a commit. Email addresses go only in `~/.config/ccx/config.local.toml`, which is never committed. Tests and docs use `@example.com` placeholders only. The `check-emails` task enforces this rule in CI.
 7. **Real accounts (D3):** during development, Claude uses only read-only commands and `/usage` fetches on the real accounts. Claude never runs sync, adopt, handoff, login, logout or rm on a real account without asking Clayton. Tests use a temporary `HOME` and `testdata/fakebin/claude`.
+
+## M0 results that change later issues
+
+Tests 1 and 4 are done (claude 2.1.296). Tests 2, 3, 5 and 6 wait for Clayton (planned stop 1).
+
+- **#9:** use the `/usage` command of ADR 0005 with `--settings '{"disableAllHooks":true}'`. Read `usage_report` from the top level of the `assistant` event, not from `message`. Accept `resets_at: null`. The fetch makes an empty `projects/<encoded cwd>/memory/` directory, so always run it from one fixed probe directory.
+- **#14:** the handoff file set is `projects/<enc>/<id>.jsonl`, every `projects/*/<id>/` directory (a sidecar can be in a different `projects/` directory), `file-history/<id>/`, `session-env/<id>/` (empty in all cases seen) and `plans/<slug>.md` for each `slug` in the transcript. Do not copy `todos/` (not written), `memory/` or `jobs/`. Implement the cwd encoding rule of ADR 0006 with its golden examples.
+- **#14, #15:** a session is open when `sessions/<pid>.json` has the `sessionId`, the `pid` is alive and its start time agrees with `procStart` (UTC, `ps -o lstart=` format). Never read `sessions/*.key`.
 
 ## Planned stops
 
