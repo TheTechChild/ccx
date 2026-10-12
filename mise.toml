@@ -1,0 +1,28 @@
+[tools]
+rust = { version = "1.99.0", components = "rustfmt,clippy" }
+cargo-dist = "0.33.0"
+
+[tasks.fmt]
+description = "Check the code format"
+run = "cargo fmt --all -- --check"
+
+[tasks.lint]
+description = "Run clippy and fail on warnings"
+run = "cargo clippy --all-targets --locked -- -D warnings"
+
+[tasks.test]
+description = "Run all tests"
+run = "cargo test --locked"
+
+[tasks.check-emails]
+description = "Fail on email addresses that are not *@example.com or *noreply*"
+run = "scripts/check-emails.sh"
+
+[tasks.ci]
+description = "Run all CI checks"
+run = [
+  "mise run fmt",
+  "mise run lint",
+  "mise run test",
+  "mise run check-emails",
+]

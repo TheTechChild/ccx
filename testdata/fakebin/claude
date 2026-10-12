@@ -1,0 +1,12 @@
+#!/usr/bin/env perl
+# Fake `claude` for end-to-end tests. It prints its program path, its
+# arguments and its environment as one JSON object, then exits 0.
+use strict;
+use warnings;
+use JSON::PP;
+
+print JSON::PP->new->canonical->encode({
+    program => $0,
+    argv    => \@ARGV,
+    env     => \%ENV,
+}), "\n";
