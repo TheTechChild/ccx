@@ -11,7 +11,7 @@ use std::process::{Command, ExitCode};
 use clap::{Parser, Subcommand};
 
 use crate::env::Env;
-use crate::launch::Invocation;
+use crate::launch::{Invocation, Pick};
 
 /// The exit code when ccx cannot start claude.
 const EXIT_EXEC_FAILED: u8 = 127;
@@ -60,7 +60,11 @@ fn main() -> ExitCode {
 fn run(args: Vec<OsString>) -> config::Result<ExitCode> {
     match launch::parse_args(args.clone())? {
         Invocation::Own => run_own(args),
-        Invocation::Launch { account, args } => run_launch(account.as_deref(), args),
+        Invocation::Launch {
+            account,
+            args,
+            subcommand,
+        } => run_launch(account.as_deref(), subcommand, args),
     }
 }
 
@@ -75,11 +79,26 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
     Err(format!("`ccx {word}` is not ready yet"))
 }
 
-fn run_launch(name: Option<&str>, args: Vec<OsString>) -> config::Result<ExitCode> {
+fn run_launch(
+    name: Option<&str>,
+    subcommand: Option<&str>,
+    args: Vec<OsString>,
+) -> config::Result<ExitCode> {
     let parent = Env::from_process();
     let depth = launch::check_depth(&parent)?;
     let config = config::load(&parent)?;
-    let account = launch::choose_account(&config, name, &parent)?;
+    let account = match launch::pick_account(&config, name, subcommand, &parent)? {
+        Pick::Named(account) => account,
+        Pick::Base(account) => {
+            if let Some(word) = subcommand
+                && std::io::stderr().is_terminal()
+            {
+                eprintln!("{}", launch::base_note(word, account));
+            }
+            account
+        }
+        Pick::Auto => auto_select(&config),
+    };
     let (env, removed) = launch::build_env(&parent, account, depth);
     let self_exe = std::env::current_exe().ok();
     let claude = launch::find_claude(&config, &parent, self_exe.as_deref());
@@ -112,6 +131,13 @@ fn run_launch(name: Option<&str>, args: Vec<OsString>) -> config::Result<ExitCod
         .exec();
     eprintln!("ccx: cannot run {}: {error}", claude.display());
     Ok(ExitCode::from(EXIT_EXEC_FAILED))
+}
+
+/// Automatic selection for a session with no account name. Only
+/// `Pick::Auto` comes here, so claude subcommands never fetch usage.
+/// Automatic selection is not ready yet: use the base account.
+fn auto_select(config: &config::Config) -> &config::Account {
+    config.base()
 }
 
 #[cfg(test)]
