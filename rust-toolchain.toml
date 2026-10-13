@@ -1,0 +1,7 @@
+# The release workflow builds with the runner's rustup, not with mise.
+# This file makes rustup install the same Rust as mise.toml.
+# Keep the two versions the same.
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
