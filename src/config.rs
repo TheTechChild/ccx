@@ -252,8 +252,16 @@ pub fn home(env: &Env) -> Result<&OsStr> {
 /// Reads and validates `config.toml` and the optional overlay.
 pub fn load(env: &Env) -> Result<Config> {
     let main_path = config_path(env)?;
-    let main_text = std::fs::read_to_string(&main_path)
-        .map_err(|e| format!("cannot read config {}: {e}", main_path.display()))?;
+    let main_text = std::fs::read_to_string(&main_path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!(
+                "cannot read config {}: the file does not exist; run `ccx manage adopt` to make it, or `ccx manage bootstrap` to set up a new machine",
+                main_path.display()
+            )
+        } else {
+            format!("cannot read config {}: {e}", main_path.display())
+        }
+    })?;
     let overlay_path = overlay_path(env)?;
     let overlay_text = match std::fs::read_to_string(&overlay_path) {
         Ok(text) => Some(text),
