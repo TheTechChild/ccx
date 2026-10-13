@@ -40,7 +40,7 @@ pub const SKILLS_SYNCED: &str = "synced";
 
 /// Top-level items that sync never shares. All dotfiles are also in this
 /// group.
-pub const NEVER: [&str; 22] = [
+pub const NEVER: [&str; 26] = [
     "projects",
     "history.jsonl",
     "file-history",
@@ -60,6 +60,11 @@ pub const NEVER: [&str; 22] = [
     "settings.local.json",
     "remote-settings.json",
     "mcp-needs-auth-cache.json",
+    // Runtime items of Claude Code and Claude in Chrome.
+    "chrome",
+    "daemon.log",
+    "downloads",
+    "feedback",
     // Dotfiles, also listed here so that the list is complete.
     ".claude.json",
     ".credentials.json",
@@ -762,7 +767,10 @@ mod tests {
         for name in [".git", ".DS_Store", ".claude.json.lock", ".anything"] {
             assert_eq!(classify(name), Class::Never, "{name}");
         }
-        for name in ["chrome", "downloads", "README.md", "settings.json.bak"] {
+        for name in ["chrome", "daemon.log", "downloads", "feedback"] {
+            assert_eq!(classify(name), Class::Never, "{name}");
+        }
+        for name in ["new-dir", "README.md", "settings.json.bak"] {
             assert_eq!(classify(name), Class::Unknown, "{name}");
         }
     }
@@ -867,11 +875,11 @@ mod tests {
         ] {
             write(&base.join(name), "x");
         }
-        for name in ["projects", "chrome", ".git", "skills"] {
+        for name in ["projects", "chrome", "new-dir", ".git", "skills"] {
             fs::create_dir(base.join(name)).unwrap();
         }
         let plan = t.plan(&[]);
-        assert_eq!(plan.unknown, ["README.md", "chrome", "daemon.log"]);
+        assert_eq!(plan.unknown, ["README.md", "new-dir"]);
         let paths: Vec<_> = plan.items.iter().map(|i| i.path.clone()).collect();
         assert_eq!(
             paths,

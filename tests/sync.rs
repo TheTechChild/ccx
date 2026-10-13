@@ -212,16 +212,20 @@ fn sync_on_the_real_layout_adds_skill_links_and_keeps_correct_links() {
         unknown,
         [
             "README.md (not shared)",
-            "chrome (not shared)",
-            "daemon.log (not shared)",
-            "downloads (not shared)",
-            "feedback (not shared)",
             "gh-pr-status-cache.json (not shared)",
             "settings.json.bak-ultracode (not shared)",
         ]
     );
     // Never-share entries are not linked.
-    for name in ["history.jsonl", "projects", "settings.local.json", "chrome"] {
+    for name in [
+        "history.jsonl",
+        "projects",
+        "settings.local.json",
+        "chrome",
+        "daemon.log",
+        "downloads",
+        "feedback",
+    ] {
         let meta = fs::symlink_metadata(acct.join(name));
         assert!(
             meta.is_err() || !meta.unwrap().file_type().is_symlink(),

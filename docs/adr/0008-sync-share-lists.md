@@ -38,6 +38,7 @@ Sync never links these items:
 - `sessions/`, `session-env/`, `shell-snapshots/`
 - `backups/`, `cache/`, `ide/`, `daemon/`, `telemetry/`, `paste-cache/`, `jobs/`, `state/`
 - `settings.local.json`, `remote-settings.json`, `mcp-needs-auth-cache.json`
+- `chrome/`, `daemon.log`, `downloads/`, `feedback/` (runtime items of Claude Code and Claude in Chrome)
 
 ### Unknown
 
