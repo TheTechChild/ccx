@@ -142,7 +142,7 @@ fn problems(fx: &mut Fixture) {
     write(&angel2.join("skills/my-local/SKILL.md"), "local");
     fs::create_dir(angel2.join("skills/synced")).unwrap();
     // An unknown base entry and the stray identity file.
-    fs::create_dir(base.join("chrome")).unwrap();
+    fs::create_dir(base.join("new-dir")).unwrap();
     write(&base.join(".claude.json"), "{}");
     // A hook and a status line with the absolute home path.
     let settings = format!(
