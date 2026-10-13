@@ -338,6 +338,8 @@ The completion files in `completions/` come from the CLI definition. A test fail
 
 [cargo-dist](https://opensource.axo.dev/cargo-dist/) makes the release. The config is in `dist-workspace.toml`. The workflow is `.github/workflows/release.yml`. Do not edit the workflow by hand. Change `dist-workspace.toml` and run `mise exec -- dist generate`.
 
+The release workflow does not use mise. It uses rustup on each runner, and rustup reads the Rust version from `rust-toolchain.toml`. When you change the Rust version in `mise.toml`, change it in `rust-toolchain.toml` too.
+
 1. Make sure that `version` in `Cargo.toml` is the new version, and that CI is green on `main`.
 2. Make sure that the plan is correct: `mise exec -- dist plan`.
 3. Push a tag for the version, for example `git tag v0.1.0 && git push origin v0.1.0`.
