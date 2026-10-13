@@ -4,7 +4,7 @@ ccx is a command-line tool. It starts Claude Code on the account that has the mo
 
 ccx is for a person who has more than one Claude Code account, for example a personal Max account and a work account. Each account has its own configuration directory. ccx reads the usage of each account and starts `claude` on the account that has the most capacity available. You can also name the account.
 
-> **Status:** Version 0.1.0. `ccx @name`, automatic selection, `ccx status`, `ccx usage refresh`, `ccx manage adopt`, `ccx manage add`, `ccx manage bootstrap`, `ccx manage login`, `ccx manage logout`, `ccx manage edit`, `ccx manage edit-config`, `ccx manage rm`, `ccx manage list`, `ccx manage spend`, `ccx manage shell-init`, `ccx manage sync` (also `--prefs`), `ccx manage doctor`, `ccx manage service`, `ccx handoff`, the automatic handoff on `ccx -c` and `ccx --resume <id>`, and API-key accounts as a paid fallback are available. Refer to [PLAN.md](PLAN.md) for the plan.
+> **Status:** Version 0.1.1. `ccx @name`, automatic selection, `ccx status`, `ccx usage refresh`, `ccx manage adopt`, `ccx manage add`, `ccx manage bootstrap`, `ccx manage login`, `ccx manage logout`, `ccx manage edit`, `ccx manage edit-config`, `ccx manage rm`, `ccx manage list`, `ccx manage spend`, `ccx manage shell-init`, `ccx manage sync` (also `--prefs`), `ccx manage doctor`, `ccx manage service`, `ccx handoff`, the automatic handoff on `ccx -c` and `ccx --resume <id>`, and API-key accounts as a paid fallback are available. Refer to [PLAN.md](PLAN.md) for the plan.
 
 ## Credential policy
 
