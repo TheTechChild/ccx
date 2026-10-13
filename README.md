@@ -4,7 +4,7 @@ ccx is a command-line tool. It starts Claude Code on the account that has the mo
 
 ccx is for a person who has more than one Claude Code account, for example a personal Max account and a work account. Each account has its own configuration directory. ccx reads the usage of each account and starts `claude` on the account that has the most capacity available. You can also name the account.
 
-> **Status:** Version 0.1.2. `ccx @name`, automatic selection, `ccx status`, `ccx usage refresh`, `ccx manage adopt`, `ccx manage add`, `ccx manage bootstrap`, `ccx manage login`, `ccx manage logout`, `ccx manage edit`, `ccx manage edit-config`, `ccx manage rm`, `ccx manage list`, `ccx manage spend`, `ccx manage shell-init`, `ccx manage sync` (also `--prefs`), `ccx manage doctor`, `ccx manage service`, `ccx handoff`, the automatic handoff on `ccx -c` and `ccx --resume <id>`, and API-key accounts as a paid fallback are available. Refer to [PLAN.md](PLAN.md) for the plan.
+> **Status:** Version 0.1.2. `ccx @name`, automatic selection, `ccx status`, `ccx usage refresh`, `ccx manage adopt`, `ccx manage add`, `ccx manage bootstrap`, `ccx manage login`, `ccx manage logout`, `ccx manage edit`, `ccx manage edit-config`, `ccx manage rm`, `ccx manage list`, `ccx manage spend`, `ccx manage shell-init`, `ccx manage sync` (also `--prefs`), `ccx manage doctor`, `ccx manage service`, `ccx handoff`, the automatic handoff on `ccx -c` and `ccx --resume <id>`, and API-key accounts as a paid fallback are available. Refer to [PLAN.md](PLAN.md) for the project history.
 
 ## Credential policy
 
@@ -17,9 +17,16 @@ The only secrets that ccx reads are the keys of [API-key accounts](#api-key-acco
 Install ccx with [mise](https://mise.jdx.dev):
 
 ```sh
-mise use -g github:TheTechChild/ccx
+mise use -g github:TheTechChild/ccx@latest
 ccx --version
 ```
+
+To get a new release later, run `mise upgrade github:TheTechChild/ccx`.
+
+mise does not show a release that is less than 24 hours old (the mise setting `minimum_release_age`). Thus, for 24 hours after a release, mise installs the version before it. To get a new release immediately, do one of these steps:
+
+- Exclude ccx from the setting one time for all installs: `mise settings add minimum_release_age_excludes "github:TheTechChild/ccx"`.
+- Ignore the setting for one command: `mise use -g github:TheTechChild/ccx@latest --minimum-release-age 0s` or `mise upgrade github:TheTechChild/ccx --minimum-release-age 0s`.
 
 mise downloads the release archive for your system from GitHub and puts `ccx` on `PATH`. The releases are for macOS and Linux, on x86_64 (amd64) and arm64 (aarch64). Each release has a `sha256.sum` file with the checksums of the archives.
 
@@ -601,6 +608,12 @@ ccx reads `config.toml` from the first location that applies:
 3. `~/.config/ccx/config.toml` (also on macOS)
 
 ```toml
+[launch]                   # Optional.
+claude_bin = "~/.local/bin/claude"   # Optional. The path of claude. The default is the claude on PATH.
+
+[base]                     # Optional. Used by `ccx manage bootstrap`.
+repo = "https://github.com/example/claude-config.git"   # The git repo of the base account ~/.claude.
+
 [accounts.main]
 dir = "~/.claude"          # The base account. Exactly one account must use this directory.
 
@@ -609,6 +622,7 @@ dir = "~/.claude-angel2"
 aliases = ["claude2"]      # Optional. `ccx manage shell-init` makes `alias claude2='ccx @angel2'`.
 own = ["statusline.py"]    # Optional. Items that `ccx manage sync` does not link.
 weight = 5                 # Optional. Overrides the weight of the tier for automatic selection.
+enabled = true             # Optional. false: automatic selection does not use the account.
 
 [accounts.paid]            # Optional. An API-key account: a paid fallback.
 dir = "~/.claude-paid"
@@ -683,6 +697,8 @@ If ccx cannot start `claude`, it exits with code 127.
 
 ## Development
 
+[CONTRIBUTING.md](CONTRIBUTING.md) tells you how to set up the project, run the checks and propose a change. [AGENTS.md](AGENTS.md) has the module map, the test method and the hard rules. `CLAUDE.md` imports `AGENTS.md` for Claude Code.
+
 This project uses [mise](https://mise.jdx.dev) for all tools.
 
 1. Install the tools: `mise install`.
@@ -698,10 +714,13 @@ The completion files in `completions/` come from the CLI definition. A test fail
 
 The release workflow does not use mise. It uses rustup on each runner, and rustup reads the Rust version from `rust-toolchain.toml`. When you change the Rust version in `mise.toml`, change it in `rust-toolchain.toml` too.
 
-1. Make sure that `version` in `Cargo.toml` is the new version, and that CI is green on `main`.
-2. Make sure that the plan is correct: `mise exec -- dist plan`.
-3. Push a tag for the version, for example `git tag v0.1.0 && git push origin v0.1.0`.
-4. The release workflow builds the archives for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu`, and makes the GitHub release with the archives and `sha256.sum`.
+In these steps, `vX.Y.Z` is the new version, for example `v0.1.3`.
+
+1. Make a pull request that sets `version = "X.Y.Z"` in `Cargo.toml`, updates `Cargo.lock` (`mise exec -- cargo check`) and sets the version in the status line of this README. Use the commit message `chore(release): prepare vX.Y.Z`. Merge it when CI is green.
+2. Update your local `main`: `git switch main && git pull`.
+3. Make sure that the plan is correct: `mise exec -- dist plan`.
+4. Push a tag for the version: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+5. The release workflow builds the archives for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu`, and makes the GitHub release with the archives and `sha256.sum`.
 
 ## Privacy rule
 
