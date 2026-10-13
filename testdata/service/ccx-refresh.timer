@@ -1,9 +1,9 @@
 [Unit]
-Description=ccx usage refresh every 300 s
+Description=ccx usage refresh every 60 s
 
 [Timer]
 OnActiveSec=1min
-OnUnitActiveSec=300
+OnUnitActiveSec=60
 Unit=ccx-refresh.service
 
 [Install]

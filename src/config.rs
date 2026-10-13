@@ -94,6 +94,12 @@ pub struct Usage {
     pub fresh_minutes: u64,
     pub fetch_timeout_secs: u64,
     pub refresh_min_gap_secs: u64,
+    /// Adapt the interval of the scheduled refresh to the usage (#22).
+    pub adaptive: bool,
+    /// The shortest interval of the scheduled refresh.
+    pub min_interval_secs: u64,
+    /// The longest interval of the scheduled refresh.
+    pub max_interval_secs: u64,
 }
 
 /// Changes to the built-in allowlist of `.claude.json` keys (#17).
@@ -179,6 +185,9 @@ struct RawUsage {
     fresh_minutes: Option<u64>,
     fetch_timeout_secs: Option<u64>,
     refresh_min_gap_secs: Option<u64>,
+    adaptive: Option<bool>,
+    min_interval_secs: Option<u64>,
+    max_interval_secs: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -382,7 +391,19 @@ fn build(raw: RawConfig, home: &OsStr) -> Result<Config> {
         fresh_minutes: usage.fresh_minutes.unwrap_or(15),
         fetch_timeout_secs: usage.fetch_timeout_secs.unwrap_or(5),
         refresh_min_gap_secs: usage.refresh_min_gap_secs.unwrap_or(60),
+        adaptive: usage.adaptive.unwrap_or(true),
+        min_interval_secs: usage.min_interval_secs.unwrap_or(120),
+        max_interval_secs: usage.max_interval_secs.unwrap_or(1800),
     };
+    if usage.min_interval_secs == 0 {
+        return Err("usage.min_interval_secs: must be 1 or more".into());
+    }
+    if usage.min_interval_secs > usage.max_interval_secs {
+        return Err(format!(
+            "usage.min_interval_secs ({}) must be less than or equal to usage.max_interval_secs ({})",
+            usage.min_interval_secs, usage.max_interval_secs
+        ));
+    }
     let prefs = raw.prefs.unwrap_or_default();
     let launch = raw.launch.unwrap_or_default();
     Ok(Config {
@@ -622,6 +643,39 @@ mod tests {
             ],
             [15, 5, 60]
         );
+        assert!(usage.adaptive);
+        assert_eq!(
+            [usage.min_interval_secs, usage.max_interval_secs],
+            [120, 1800]
+        );
+    }
+
+    #[test]
+    fn interval_keys_load_and_min_is_at_most_max() {
+        let config = parse_ok(&format!(
+            "{MINIMAL}\n[usage]\nadaptive = false\nmin_interval_secs = 300\nmax_interval_secs = 300\n"
+        ));
+        assert!(!config.usage.adaptive);
+        assert_eq!(config.usage.min_interval_secs, 300);
+        assert_eq!(config.usage.max_interval_secs, 300);
+
+        let err = parse_err(&format!(
+            "{MINIMAL}\n[usage]\nmin_interval_secs = 600\nmax_interval_secs = 300\n"
+        ));
+        assert!(
+            err.contains("usage.min_interval_secs (600) must be less than or equal to usage.max_interval_secs (300)"),
+            "{err}"
+        );
+        // The default max (1800) applies when only min is given.
+        let err = parse_err(&format!("{MINIMAL}\n[usage]\nmin_interval_secs = 1801\n"));
+        assert!(err.contains("(1800)"), "{err}");
+        let err = parse_err(&format!("{MINIMAL}\n[usage]\nmin_interval_secs = 0\n"));
+        assert!(
+            err.contains("usage.min_interval_secs: must be 1 or more"),
+            "{err}"
+        );
+        let err = parse_err(&format!("{MINIMAL}\n[usage]\nadaptive = \"yes\"\n"));
+        assert!(err.contains("adaptive"), "{err}");
     }
 
     #[test]

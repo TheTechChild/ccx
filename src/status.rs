@@ -16,6 +16,7 @@ use crate::config::{self, Account, Config, Pick, Result};
 use crate::env::Env;
 use crate::launch;
 use crate::refresh;
+use crate::schedule;
 use crate::usage::{self, Kind, Limit, Snapshot};
 
 /// The exit code when all logged-in accounts are limited.
@@ -279,12 +280,14 @@ pub fn auth_status_text(
 /// A manual refresh waits for the refresh lock and always runs the fetch.
 /// A background refresh (`background`) writes no output. It exits with no
 /// fetch when a different process holds the lock, or when the last fetch
-/// started less than `usage.refresh_min_gap_secs` ago.
-pub fn refresh(env: &Env, name: Option<&str>, background: bool) -> Result<bool> {
+/// started less than `usage.refresh_min_gap_secs` ago. A scheduled refresh
+/// (`scheduled`, #22) is a background refresh that fetches only the
+/// accounts that are due (refer to `schedule`).
+pub fn refresh(env: &Env, name: Option<&str>, background: bool, scheduled: bool) -> Result<bool> {
     let config = config::load(env)?;
     let home = config::home(env)?;
     let depth = launch::check_depth(env)?;
-    let accounts: Vec<&Account> = match name {
+    let mut accounts: Vec<&Account> = match name {
         Some(name) => {
             let account = config.account(name).ok_or_else(|| {
                 format!(
@@ -306,10 +309,12 @@ pub fn refresh(env: &Env, name: Option<&str>, background: bool) -> Result<bool> 
             .filter(|a| a.enabled && !a.is_paid())
             .collect(),
     };
-    let claude = find_claude(&config, env)
-        .ok_or("cannot find claude; set launch.claude_bin or CCX_CLAUDE_BIN")?;
+    let claude = find_claude(&config, env);
+    if claude.is_none() && !scheduled {
+        return Err("cannot find claude; set launch.claude_bin or CCX_CLAUDE_BIN".into());
+    }
     let gap = config.usage.refresh_min_gap_secs;
-    let _lock = if background {
+    let _lock = if background || scheduled {
         // Check the gap before the lock, so that a refresh that has no
         // work to do makes no file.
         if !refresh::gap_passed(refresh::last_start(home), usage::now_ms(), gap) {
@@ -334,19 +339,56 @@ pub fn refresh(env: &Env, name: Option<&str>, background: bool) -> Result<bool> 
             }
         }
     };
+    let mut plan = None;
+    if scheduled {
+        // The lock is held, so no other process changes the schedule now.
+        let now = usage::now_ms();
+        let mut state = schedule::read_state(home);
+        state.retain(&accounts.iter().map(|a| a.name.as_str()).collect::<Vec<_>>());
+        accounts.retain(|a| {
+            let cache = usage::read_cache(&usage::cache_path(home, &a.name));
+            let launched = schedule::last_launch(home, &a.name);
+            state.update(&a.name, cache.as_ref(), launched, now, &config.usage) <= now
+        });
+        for account in &accounts {
+            state
+                .accounts
+                .get_mut(&account.name)
+                .expect("updated above")
+                .last_attempt_ms = Some(now);
+        }
+        // A tick with no due account starts no claude process.
+        if accounts.is_empty() {
+            schedule::write_state(home, &state)?;
+            return Ok(true);
+        }
+        plan = Some(state);
+    }
+    let claude = claude.ok_or("cannot find claude; set launch.claude_bin or CCX_CLAUDE_BIN")?;
     refresh::record_start(home, usage::now_ms())?;
     let timeout = REFRESH_TIMEOUT.max(Duration::from_secs(config.usage.fetch_timeout_secs));
     let results = refresh::fetch_all(&accounts, &claude, env, home, depth, timeout);
+    if let Some(mut state) = plan {
+        // Record the new due times.
+        let now = usage::now_ms();
+        for account in &accounts {
+            let cache = usage::read_cache(&usage::cache_path(home, &account.name));
+            let launched = schedule::last_launch(home, &account.name);
+            state.update(&account.name, cache.as_ref(), launched, now, &config.usage);
+        }
+        schedule::write_state(home, &state)?;
+    }
+    let quiet = background || scheduled;
     let mut all_ok = true;
     for (account, result) in accounts.iter().zip(results) {
         match result {
-            Ok(_) if background => {}
+            Ok(_) if quiet => {}
             Ok(snapshot) => println!(
                 "{}: ok ({} usage windows)",
                 account.name,
                 snapshot.limits.len()
             ),
-            Err(_) if background => all_ok = false,
+            Err(_) if quiet => all_ok = false,
             Err(error) => {
                 all_ok = false;
                 eprintln!("ccx: {}: usage fetch: {error}", account.name);
