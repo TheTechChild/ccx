@@ -1,5 +1,6 @@
 mod adopt;
 mod config;
+mod doctor;
 mod env;
 mod launch;
 mod list;
@@ -91,6 +92,15 @@ enum Manage {
         #[arg(long)]
         force: bool,
     },
+    /// Check the setup and show the problems.
+    ///
+    /// Doctor only reports. It never changes a file. Doctor prints one line for each check with OK, WARN or FAIL. The exit
+    /// code is 0 when all checks pass, 1 for a WARN and 2 for a FAIL.
+    Doctor {
+        /// Print the results as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, clap::Args)]
@@ -140,6 +150,7 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
                         return Ok(ExitCode::FAILURE);
                     }
                 }
+                Manage::Doctor { json } => return Ok(ExitCode::from(doctor::run(&env, json)?)),
             }
             return Ok(ExitCode::SUCCESS);
         }

@@ -2,7 +2,7 @@
 
 ccx is a command-line tool. It starts Claude Code on the account that has the most usage available.
 
-> **Status:** Work in progress. ccx starts Claude Code on an account that you name. `ccx manage adopt`, `ccx manage list`, `ccx manage shell-init` and `ccx manage sync` are available. Automatic selection is not available yet. Refer to [PLAN.md](PLAN.md) for the plan.
+> **Status:** Work in progress. ccx starts Claude Code on an account that you name. `ccx manage adopt`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync` and `ccx manage doctor` are available. Automatic selection is not available yet. Refer to [PLAN.md](PLAN.md) for the plan.
 
 ## Usage
 
@@ -118,6 +118,30 @@ own = ["statusline.py", "skills/tdd"]   # Optional. Sync shows these items as SK
 ```
 
 > **Known risk:** `plugins/` is one link, so `plugins/synced` is shared by all accounts. To keep `plugins/` separate, put `"plugins"` in `own`.
+
+### Check the setup with doctor
+
+`ccx manage doctor` checks the ccx setup. It shows one line for each check with `OK`, `WARN` or `FAIL`. Doctor only reports. It never changes a file.
+
+```sh
+ccx manage doctor          # Show the results as text.
+ccx manage doctor --json   # Show the results as JSON for scripts.
+```
+
+| Check | What doctor examines |
+|---|---|
+| `config` | The config loads. |
+| `claude` | `claude` is on `PATH`. Doctor shows its version. |
+| `env` | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_SECURESTORAGE_CONFIG_DIR` and `CLAUDE_CONFIG_DIR` in the current shell. ccx removes or replaces them at launch. Doctor never shows their values. |
+| `path` | Each account directory exists, and the config writes it in the canonical form (absolute, with no trailing slash). |
+| `stray` | The stray file `~/.claude/.claude.json`. |
+| `unknown` | Entries in `~/.claude` that are not on the share list or the never-share list. |
+| `link` | The sync plan of each account. A shared item that is a real file or directory, for example `settings.json` after a write replaced the link, is a `FAIL`. |
+| `skill` | Real directories and files in `<account>/skills/` that are not links and not `synced`: "local-only skill <name> in <account>; promote to base?". |
+| `home-path` | `hooks` and `statusLine` commands in `settings.json` that use the absolute home path. Doctor shows the `$HOME/...` form. |
+| `keychain` | macOS only. Keychain items `Claude Code-credentials-*` that agree with no account directory. Doctor reads only the item names, never the secret values. |
+
+The exit code is 0 when all checks pass, 1 when there is a `WARN` and 2 when there is a `FAIL`.
 
 ## Configuration
 

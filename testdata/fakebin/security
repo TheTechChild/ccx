@@ -1,0 +1,25 @@
+#!/bin/sh
+# Fake macOS `security` for end-to-end tests. ccx must never use the real
+# keychain in a test.
+#
+# - `security dump-keychain` prints one synthetic generic-password item for
+#   each line of FAKE_KEYCHAIN_SERVICES. It prints attributes only, like the
+#   real command with no `-d`.
+# - All other calls fail, so that a test finds a call that is not expected.
+if [ "$*" != "dump-keychain" ]; then
+  echo "fake security: unexpected arguments: $*" >&2
+  exit 1
+fi
+printf '%s\n' "${FAKE_KEYCHAIN_SERVICES:-}" | while IFS= read -r service; do
+  [ -n "$service" ] || continue
+  cat <<ITEM
+keychain: "/Users/example/Library/Keychains/login.keychain-db"
+version: 512
+class: "genp"
+attributes:
+    0x00000007 <blob>="$service"
+    "acct"<blob>="user@example.com"
+    "cdat"<timedate>=0x32303236303130313030303030305A00  "20260101000000Z\000"
+    "svce"<blob>="$service"
+ITEM
+done

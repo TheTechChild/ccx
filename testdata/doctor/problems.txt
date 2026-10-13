@@ -1,0 +1,14 @@
+OK    config: 2 accounts in ~/.config/ccx/config.toml
+OK    claude: <REPO>/testdata/fakebin/claude (2.1.296 (Claude Code))
+WARN  env: CLAUDE_CODE_OAUTH_TOKEN is set in this shell; ccx removes it at launch
+WARN  path: angel2: the dir `~/.claude-angel2/` is not canonical; write `~/.claude-angel2`
+OK    path: angel2: ~/.claude-angel2
+OK    path: main: ~/.claude
+WARN  stray: ~/.claude/.claude.json is a stray file; `ccx manage adopt` moves it to a backup
+WARN  unknown: chrome in ~/.claude is not on the share list or the never-share list
+FAIL  link: angel2: settings.json is a real file, not a link to the base; `ccx manage sync angel2 --force` moves it to a backup and links it
+WARN  skill: local-only skill my-local in angel2; promote to base?
+WARN  home-path: ~/.claude/settings.json: hooks.Stop[0].hooks[0].command uses the absolute home path; write `$HOME/.claude/hooks/notify.sh`
+WARN  keychain: orphan keychain item `Claude Code-credentials-0badf00d` matches no account dir
+
+4 OK, 7 WARN, 1 FAIL

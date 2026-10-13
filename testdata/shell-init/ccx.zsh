@@ -75,6 +75,13 @@ _arguments "${_arguments_options[@]}" : \
 '::name -- The account to sync:_default' \
 && ret=0
 ;;
+(doctor)
+_arguments "${_arguments_options[@]}" : \
+'--json[Print the results as JSON]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -157,6 +164,7 @@ _ccx__subcmd__manage_commands() {
 'list:Show each configured account' \
 'shell-init:Print shell code for the profile\: completions and account aliases' \
 'sync:Link the shared setup of the base account into other accounts' \
+'doctor:Check the setup and show the problems' \
     )
     _describe -t commands 'ccx manage commands' commands "$@"
 }
@@ -164,6 +172,11 @@ _ccx__subcmd__manage_commands() {
 _ccx__subcmd__manage__subcmd__adopt_commands() {
     local commands; commands=()
     _describe -t commands 'ccx manage adopt commands' commands "$@"
+}
+(( $+functions[_ccx__subcmd__manage__subcmd__doctor_commands] )) ||
+_ccx__subcmd__manage__subcmd__doctor_commands() {
+    local commands; commands=()
+    _describe -t commands 'ccx manage doctor commands' commands "$@"
 }
 (( $+functions[_ccx__subcmd__manage__subcmd__list_commands] )) ||
 _ccx__subcmd__manage__subcmd__list_commands() {

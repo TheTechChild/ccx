@@ -42,6 +42,8 @@ pub struct Account {
     pub name: String,
     /// The canonical config directory.
     pub dir: PathBuf,
+    /// The `dir` text as the config writes it, before canonicalization.
+    pub dir_text: String,
     pub weight: Option<f64>,
     pub aliases: Vec<String>,
     pub enabled: bool,
@@ -270,7 +272,8 @@ fn build(raw: RawConfig, home: &OsStr) -> Result<Config> {
         let dir = account
             .dir
             .ok_or_else(|| format!("accounts.{name}: missing key `dir`"))?;
-        let dir = canonical(&dir, home);
+        let dir_text = dir;
+        let dir = canonical(&dir_text, home);
         if !dir.is_absolute() {
             return Err(format!(
                 "accounts.{name}.dir: `{}` is not an absolute path",
@@ -298,6 +301,7 @@ fn build(raw: RawConfig, home: &OsStr) -> Result<Config> {
             is_base: dir == base_dir,
             name,
             dir,
+            dir_text,
             weight: account.weight,
             aliases: account.aliases.unwrap_or_default(),
             enabled: account.enabled.unwrap_or(true),

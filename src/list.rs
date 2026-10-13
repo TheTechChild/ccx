@@ -1,7 +1,6 @@
 //! `ccx manage list [--json]`: show each configured account.
 
 use std::ffi::OsStr;
-use std::path::Path;
 
 use serde_json::json;
 
@@ -43,11 +42,7 @@ pub fn to_json(config: &Config) -> String {
 pub fn to_table(config: &Config, home: &OsStr) -> String {
     let mut rows = vec![["NAME", "DIR", "EMAIL", "ALIASES"].map(String::from)];
     for account in &config.accounts {
-        let dir = match account.dir.strip_prefix(Path::new(home)) {
-            Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
-            Ok(rest) => format!("~/{}", rest.display()),
-            Err(_) => account.dir.display().to_string(),
-        };
+        let dir = crate::paths::tilde(&account.dir, home);
         let aliases = match account.aliases.join(", ") {
             text if text.is_empty() => "-".to_string(),
             text => text,
@@ -82,6 +77,7 @@ pub fn to_table(config: &Config, home: &OsStr) -> String {
 mod tests {
     use super::*;
     use crate::config::{Source, parse};
+    use std::path::Path;
 
     fn config() -> Config {
         let main = r#"
