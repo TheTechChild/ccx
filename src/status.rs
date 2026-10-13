@@ -88,15 +88,16 @@ impl Row {
 
 /// True when a window is at or above its limit in `[pick]`. Status has no
 /// session model, so a scoped weekly window never makes an account limited
-/// here. Unknown usage is not limited.
-pub fn limited(usage: Option<&Snapshot>, pick: &Pick) -> bool {
+/// here. Unknown usage is not limited. A window that has reset at `now_ms`
+/// is not limited, because its percent is from the last window.
+pub fn limited(usage: Option<&Snapshot>, pick: &Pick, now_ms: u64) -> bool {
     let Some(usage) = usage else {
         return false;
     };
     let at_or_above = |kind, avoid: u32| {
         usage
             .get(kind)
-            .is_some_and(|l| l.percent >= f64::from(avoid))
+            .is_some_and(|l| !l.has_reset(now_ms) && l.percent >= f64::from(avoid))
     };
     at_or_above(Kind::Session, pick.session_avoid)
         || at_or_above(Kind::WeeklyAll, pick.weekly_avoid)
@@ -104,7 +105,7 @@ pub fn limited(usage: Option<&Snapshot>, pick: &Pick) -> bool {
 
 /// 0 when at least one enabled, logged-in account is not limited, 3 when
 /// all of them are limited, 4 when no enabled account is logged in.
-pub fn exit_code(rows: &[Row], pick: &Pick) -> u8 {
+pub fn exit_code(rows: &[Row], pick: &Pick, now_ms: u64) -> u8 {
     let mut usable = rows
         .iter()
         .filter(|r| r.enabled && r.logged_in() == Some(true))
@@ -112,7 +113,7 @@ pub fn exit_code(rows: &[Row], pick: &Pick) -> u8 {
     if usable.peek().is_none() {
         return EXIT_NO_LOGIN;
     }
-    if usable.all(|r| limited(r.usage.as_ref(), pick)) {
+    if usable.all(|r| limited(r.usage.as_ref(), pick, now_ms)) {
         EXIT_ALL_LIMITED
     } else {
         0
@@ -155,7 +156,7 @@ pub fn run(env: &Env, as_json: bool) -> Result<u8> {
         }
     }
     let now = usage::now_ms();
-    let code = exit_code(&rows, &config.pick);
+    let code = exit_code(&rows, &config.pick, now);
     if as_json {
         println!("{}", to_json(&rows, &config.pick, now, code));
     } else {
@@ -293,8 +294,12 @@ fn percent(value: f64) -> String {
     }
 }
 
-/// `9%`, or `9% (2h05m)` with the time until the window resets.
+/// `9%`, or `9% (2h05m)` with the time until the window resets, or
+/// `reset` when the window has reset and its percent is not current.
 fn window(limit: &Limit, now_ms: u64) -> String {
+    if limit.has_reset(now_ms) {
+        return "reset".into();
+    }
     let reset = limit.resets_at.as_deref().and_then(usage::parse_rfc3339_ms);
     match reset {
         Some(at) => format!(
@@ -390,11 +395,15 @@ pub fn to_table(rows: &[Row], now_ms: u64) -> String {
     out
 }
 
-fn limit_json(limit: Option<&Limit>) -> Value {
-    limit.map_or(
-        Value::Null,
-        |l| json!({ "percent": l.percent, "resets_at": l.resets_at }),
-    )
+/// One window. When the window has reset, `reset` is true and `percent` is
+/// `null`, because the current usage is not known.
+fn window_json(limit: &Limit, now_ms: u64) -> Value {
+    let reset = limit.has_reset(now_ms);
+    json!({
+        "percent": (!reset).then_some(limit.percent),
+        "reset": reset,
+        "resets_at": limit.resets_at,
+    })
 }
 
 /// Stable JSON: the accounts in name order, the keys in alphabetical order.
@@ -405,12 +414,19 @@ pub fn to_json(rows: &[Row], pick: &Pick, now_ms: u64, exit_code: u8) -> String 
         .map(|row| {
             let auth = row.auth.as_ref();
             let usage = row.usage.as_ref();
+            let window_of = |kind| {
+                usage
+                    .and_then(|u| u.get(kind))
+                    .map_or(Value::Null, |l| window_json(l, now_ms))
+            };
             let scoped: Vec<Value> = usage
                 .into_iter()
                 .flat_map(Snapshot::scoped)
-                .map(
-                    |l| json!({ "model": l.scope, "percent": l.percent, "resets_at": l.resets_at }),
-                )
+                .map(|l| {
+                    let mut value = window_json(l, now_ms);
+                    value["model"] = json!(l.scope);
+                    value
+                })
                 .collect();
             json!({
                 "name": row.name,
@@ -425,10 +441,10 @@ pub fn to_json(rows: &[Row], pick: &Pick, now_ms: u64, exit_code: u8) -> String 
                 "source": usage.map(|u| u.source.label()),
                 "fetched_at_ms": usage.map(|u| u.fetched_at_ms),
                 "age_secs": usage.map(|u| now_ms.saturating_sub(u.fetched_at_ms) / 1000),
-                "session": limit_json(usage.and_then(|u| u.get(Kind::Session))),
-                "weekly": limit_json(usage.and_then(|u| u.get(Kind::WeeklyAll))),
+                "session": window_of(Kind::Session),
+                "weekly": window_of(Kind::WeeklyAll),
                 "scoped": scoped,
-                "limited": limited(usage, pick),
+                "limited": limited(usage, pick, now_ms),
                 "error": row.error,
             })
         })
@@ -533,14 +549,91 @@ mod tests {
     #[test]
     fn limited_uses_session_and_weekly_thresholds() {
         let p = pick();
-        assert!(!limited(None, &p));
-        assert!(!limited(Some(&snapshot(89.9, 94.0)), &p));
-        assert!(limited(Some(&snapshot(90.0, 0.0)), &p));
-        assert!(limited(Some(&snapshot(0.0, 95.0)), &p));
+        assert!(!limited(None, &p, NOW));
+        assert!(!limited(Some(&snapshot(89.9, 94.0)), &p, NOW));
+        assert!(limited(Some(&snapshot(90.0, 0.0)), &p, NOW));
+        assert!(limited(Some(&snapshot(0.0, 95.0)), &p, NOW));
         // A scoped window at 100% does not make the account limited here.
         let mut s = snapshot(0.0, 0.0);
         s.limits[2].percent = 100.0;
-        assert!(!limited(Some(&s), &p));
+        assert!(!limited(Some(&s), &p, NOW));
+    }
+
+    /// A snapshot with session 95% and weekly 97%. Each window has a reset
+    /// time three hours before NOW, or in the future when it is not `past`.
+    fn old_snapshot(session_past: bool, weekly_past: bool) -> Snapshot {
+        let at = |past| {
+            Some(if past {
+                "2025-12-31T21:00:00Z"
+            } else {
+                "2026-01-01T02:05:00Z"
+            })
+        };
+        Snapshot {
+            source: Source::Cached,
+            fetched_at_ms: NOW - 6 * 3_600_000,
+            limits: vec![
+                limit(Kind::Session, 95.0, at(session_past), None),
+                limit(Kind::WeeklyAll, 97.0, at(weekly_past), None),
+            ],
+        }
+    }
+
+    #[test]
+    fn an_expired_session_window_is_not_limited() {
+        let p = pick();
+        let mut s = old_snapshot(true, false);
+        s.limits[1].percent = 10.0;
+        assert!(!limited(Some(&s), &p, NOW));
+        let rows = [row("a", Some(true), Some(s))];
+        assert_eq!(exit_code(&rows, &p, NOW), 0);
+        // The same window is limited before its reset time.
+        let before_reset = NOW - 4 * 3_600_000;
+        assert!(limited(rows[0].usage.as_ref(), &p, before_reset));
+    }
+
+    #[test]
+    fn an_expired_weekly_window_is_not_limited() {
+        let p = pick();
+        let mut s = old_snapshot(false, true);
+        s.limits[0].percent = 10.0;
+        assert!(!limited(Some(&s), &p, NOW));
+        assert_eq!(exit_code(&[row("a", Some(true), Some(s))], &p, NOW), 0);
+        // Both windows expired: the account is usable.
+        let both = old_snapshot(true, true);
+        assert!(!limited(Some(&both), &p, NOW));
+        // Only the session window expired: the weekly window still limits.
+        assert!(limited(Some(&old_snapshot(true, false)), &p, NOW));
+    }
+
+    #[test]
+    fn expired_windows_show_as_reset() {
+        let mut s = old_snapshot(true, true);
+        s.limits.push(limit(
+            Kind::WeeklyScoped,
+            99.0,
+            Some("2025-12-31T21:00:00Z"),
+            Some("ExampleModel"),
+        ));
+        let rows = vec![row("a", Some(true), Some(s))];
+        assert_eq!(
+            to_table(&rows, NOW),
+            "\
+NAME  EMAIL  KIND  TIER  SESSION  WEEKLY  SCOPED              SOURCE                  AGE
+a     -      max   -     reset    reset   ExampleModel reset  cachedUsageUtilization  6h00m
+"
+        );
+
+        let value: Value = serde_json::from_str(&to_json(&rows, &pick(), NOW, 0)).unwrap();
+        let account = &value["accounts"][0];
+        assert_eq!(
+            account["session"],
+            json!({"percent": null, "reset": true, "resets_at": "2025-12-31T21:00:00Z"})
+        );
+        assert_eq!(account["weekly"]["reset"], true);
+        assert_eq!(account["weekly"]["percent"], Value::Null);
+        assert_eq!(account["scoped"][0]["reset"], true);
+        assert_eq!(account["limited"], false);
     }
 
     #[test]
@@ -551,28 +644,34 @@ mod tests {
         assert_eq!(
             exit_code(
                 &[row("a", Some(true), ok()), row("b", Some(true), full())],
-                &p
+                &p,
+                NOW
             ),
             0
         );
         assert_eq!(
             exit_code(
                 &[row("a", Some(true), full()), row("b", Some(false), ok())],
-                &p
+                &p,
+                NOW
             ),
             3
         );
         // Unknown usage is usable.
-        assert_eq!(exit_code(&[row("a", Some(true), None)], &p), 0);
+        assert_eq!(exit_code(&[row("a", Some(true), None)], &p, NOW), 0);
         assert_eq!(
-            exit_code(&[row("a", Some(false), ok()), row("b", None, ok())], &p),
+            exit_code(
+                &[row("a", Some(false), ok()), row("b", None, ok())],
+                &p,
+                NOW
+            ),
             4
         );
-        assert_eq!(exit_code(&[], &p), 4);
+        assert_eq!(exit_code(&[], &p, NOW), 4);
         // A disabled account does not count.
         let mut off = row("a", Some(true), ok());
         off.enabled = false;
-        assert_eq!(exit_code(&[off, row("b", Some(true), full())], &p), 3);
+        assert_eq!(exit_code(&[off, row("b", Some(true), full())], &p, NOW), 3);
     }
 
     fn rows() -> Vec<Row> {
@@ -622,9 +721,9 @@ work       -                 logged out  future_tier_xyz  unknown     unknown  -
                 "logged_in": true, "auth_method": "claude.ai", "subscription_type": "max",
                 "tier": "Max 20x", "tier_raw": "default_claude_max_20x",
                 "source": "/usage", "fetched_at_ms": NOW - 120_000, "age_secs": 120,
-                "session": {"percent": 9.0, "resets_at": "2026-01-01T02:05:00Z"},
-                "weekly": {"percent": 20.5, "resets_at": null},
-                "scoped": [{"model": "ExampleModel", "percent": 12.5,
+                "session": {"percent": 9.0, "reset": false, "resets_at": "2026-01-01T02:05:00Z"},
+                "weekly": {"percent": 20.5, "reset": false, "resets_at": null},
+                "scoped": [{"model": "ExampleModel", "percent": 12.5, "reset": false,
                             "resets_at": "2026-01-03T04:00:00.000000+00:00"}],
                 "limited": false, "error": null,
             })

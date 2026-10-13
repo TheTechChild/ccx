@@ -161,9 +161,10 @@ main    -                 max   Max 20x  11% (2h48m)  21% (3d2h)  ExampleModel 1
 - `EMAIL` comes from `config.local.toml`. If there is no email, ccx shows `-`.
 - `KIND` is `subscriptionType` from `claude auth status`. `TIER` comes from `oauthAccount.organizationRateLimitTier` in the `.claude.json` of the account. If ccx does not know the tier, it shows the raw value.
 - `SESSION`, `WEEKLY` and `SCOPED` show the percent used. The time in parentheses is the time until the window resets.
+- `reset` shows that the reset time of the window is in the past. The usage data is from the last window, so ccx does not know the current percent. In the JSON, `reset` is `true` and `percent` is `null`.
 - `SOURCE` is `/usage` or `cachedUsageUtilization`. `AGE` is the age of the usage data.
 
-ccx uses the usage cache when it is less than `usage.fresh_minutes` old (default 15). If not, ccx runs the `/usage` fetch for each account at the same time, and waits for a maximum of `usage.fetch_timeout_secs` (default 5). If the fetch fails, ccx uses `cachedUsageUtilization` from the `.claude.json` of the account. If the two sources are missing, ccx shows `unknown`. A failed fetch never makes the command fail.
+ccx uses the usage cache when it is less than `usage.fresh_minutes` old (default 15). If not, ccx runs the `/usage` fetch for each account at the same time, and waits for a maximum of `usage.fetch_timeout_secs` (default 5). This time includes the read of the `claude` output. If the fetch fails, ccx uses `cachedUsageUtilization` from the `.claude.json` of the account. If the two sources are missing, ccx shows `unknown`. A failed fetch never makes the command fail.
 
 The exit code is:
 
@@ -173,7 +174,7 @@ The exit code is:
 | 3 | All logged-in enabled accounts are limited: session usage is `pick.session_avoid` (default 90) or more, or weekly usage is `pick.weekly_avoid` (default 95) or more. |
 | 4 | No enabled account is logged in. |
 
-`ccx status` has no session model. Thus, a scoped weekly window does not make an account limited here. Unknown usage does not make an account limited.
+`ccx status` has no session model. Thus, a scoped weekly window does not make an account limited here. Unknown usage and a window that shows `reset` do not make an account limited.
 
 ### Refresh the usage cache
 
