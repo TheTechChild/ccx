@@ -166,7 +166,11 @@ pub fn parse_stream(text: &str) -> Result<Vec<Limit>> {
 /// `.claude.json`. It uses `utilization.limits[]` if it is present, else
 /// `utilization.five_hour` and `utilization.seven_day`.
 pub fn parse_cached(claude_json: &str) -> Option<Snapshot> {
-    let root: Value = serde_json::from_str(claude_json).ok()?;
+    parse_cached_value(&serde_json::from_str(claude_json).ok()?)
+}
+
+/// Reads `cachedUsageUtilization` from the parsed `.claude.json`.
+pub fn parse_cached_value(root: &Value) -> Option<Snapshot> {
     let cached = root.get("cachedUsageUtilization")?;
     let fetched_at_ms = cached.get("fetchedAtMs")?.as_f64()? as u64;
     let utilization = cached.get("utilization")?;
@@ -210,17 +214,19 @@ pub fn fallback(account: &Account, home: &OsStr) -> Option<Snapshot> {
     parse_cached(&text)
 }
 
+/// `~/.local/state/ccx`: the state directory of ccx.
+pub fn state_dir(home: &OsStr) -> PathBuf {
+    Path::new(home).join(STATE_DIR)
+}
+
 /// `~/.local/state/ccx/probe`: the fixed cwd of the usage fetch.
 pub fn probe_dir(home: &OsStr) -> PathBuf {
-    Path::new(home).join(STATE_DIR).join("probe")
+    state_dir(home).join("probe")
 }
 
 /// `~/.local/state/ccx/usage/<name>.json`.
 pub fn cache_path(home: &OsStr, name: &str) -> PathBuf {
-    Path::new(home)
-        .join(STATE_DIR)
-        .join("usage")
-        .join(format!("{name}.json"))
+    state_dir(home).join("usage").join(format!("{name}.json"))
 }
 
 /// Makes `dir` and its missing parents at mode 0700.
@@ -232,15 +238,21 @@ pub fn read_cache(path: &Path) -> Option<Snapshot> {
     serde_json::from_slice(&fs::read(path).ok()?).ok()
 }
 
-/// Writes the cache file atomically: a temp file at mode 0600 in the same
-/// directory, then a rename.
+/// Writes the cache file atomically at mode 0600.
 pub fn write_cache(path: &Path, snapshot: &Snapshot) -> Result<()> {
+    let text = serde_json::to_string_pretty(snapshot).expect("a snapshot always serializes");
+    write_private(path, text.as_bytes())
+}
+
+/// Writes `text` and a newline to `path` atomically: a temp file at mode
+/// 0600 in the same directory, then a rename. It makes the directory at
+/// mode 0700 if it does not exist.
+pub fn write_private(path: &Path, text: &[u8]) -> Result<()> {
     let error = |e: std::io::Error| format!("cannot write {}: {e}", path.display());
-    let dir = path.parent().expect("a cache path has a parent");
+    let dir = path.parent().expect("a state path has a parent");
     make_private_dir(dir).map_err(error)?;
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let temp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
-    let text = serde_json::to_string_pretty(snapshot).expect("a snapshot always serializes");
     let written = (|| {
         let mut file = OpenOptions::new()
             .write(true)
@@ -248,7 +260,7 @@ pub fn write_cache(path: &Path, snapshot: &Snapshot) -> Result<()> {
             .truncate(true)
             .mode(0o600)
             .open(&temp)?;
-        file.write_all(text.as_bytes())?;
+        file.write_all(text)?;
         file.write_all(b"\n")?;
         file.sync_all()?;
         fs::rename(&temp, path)

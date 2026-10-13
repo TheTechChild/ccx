@@ -2,17 +2,29 @@
 
 ccx is a command-line tool. It starts Claude Code on the account that has the most usage available.
 
-> **Status:** Work in progress. ccx starts Claude Code on an account that you name. `ccx manage adopt`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync`, `ccx manage doctor`, `ccx status` and `ccx usage refresh` are available. Automatic selection is not available yet. Refer to [PLAN.md](PLAN.md) for the plan.
+> **Status:** Work in progress. ccx starts Claude Code on an account that you name, or on the account that it selects from the usage cache. `ccx manage adopt`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync`, `ccx manage doctor`, `ccx status` and `ccx usage refresh` are available. The automatic refresh of the usage cache is not available yet. Use `ccx usage refresh --all` or `ccx status` to refresh it. Refer to [PLAN.md](PLAN.md) for the plan.
 
 ## Usage
 
 ```sh
 ccx @angel2 --model opus   # Start claude as account angel2. ccx sends "--model opus" to claude.
-ccx                        # Start claude as the account in CCX_ACCOUNT, or as the base account.
+ccx                        # Start claude as the account in CCX_ACCOUNT, or as the account that ccx selects.
 ccx -- status              # Send all arguments to claude. Use this when an argument starts with "@" or is a ccx word.
 ```
 
 ccx keeps these first words for its own commands: `manage`, `status`, `usage` and `handoff`. ccx sends all other arguments to `claude` with no change.
+
+### Automatic selection
+
+When you do not give `@name` and `CCX_ACCOUNT` is not set, ccx selects an enabled account from the usage data. ccx uses the usage cache of `ccx usage refresh` or `ccx status`, or `cachedUsageUtilization` in `.claude.json` when it is newer. The automatic selection does not run a `/usage` fetch.
+
+1. An account is "limited" when its session usage is 90% or more, its weekly usage is 95% or more, or a matched scoped weekly usage is 98% or more. A scoped weekly window matches when its model name is in the session model name (`--model`, else `model` in `settings.json`). Case is not important. A window whose reset time is in the past counts as 0%.
+2. The score of an account that is not limited is (100 − the higher of the session % and the weekly %) × the weight. The default weights are Pro 1, Max 5x 5 and Max 20x 20. Team, Enterprise and unknown tiers use 5. ccx gets the tier from `oauthAccount` in `.claude.json`. The `weight` key of an account overrides the default.
+3. When the usage of an account is not known, ccx scores it as 50% used. Unknown usage never makes an account limited. On a tie, an account with known usage is first.
+4. ccx stays on the last account (from `~/.local/state/ccx/state.json`) when it is not limited and its score is within 10 points of the best score on a 0-100 scale.
+5. When all accounts are limited, ccx starts the account with the soonest reset and shows a warning, for example `all accounts limited; angel2 frees 14:05 (37m)`.
+
+Before ccx starts `claude`, it shows one banner line on stderr, for example `ccx → angel2 · 5h 23% · wk 61% (resets Thu 09:00) · /usage 4m`. ccx does not show the banner or the warnings when stdout or stderr is not a terminal, or for `-p` runs. ccx writes the selected account to `state.json` at mode 0600.
 
 ### Claude subcommands
 
@@ -215,6 +227,13 @@ dir = "~/.claude"          # The base account. Exactly one account must use this
 dir = "~/.claude-angel2"
 aliases = ["claude2"]      # Optional. `ccx manage shell-init` makes `alias claude2='ccx @angel2'`.
 own = ["statusline.py"]    # Optional. Items that `ccx manage sync` does not link.
+weight = 5                 # Optional. Overrides the weight of the tier for automatic selection.
+
+[pick]                     # Optional. The limits for automatic selection.
+session_avoid = 90         # Session usage (%) that makes an account limited.
+weekly_avoid = 95          # Weekly usage (%) that makes an account limited.
+scoped_avoid = 98          # Matched scoped weekly usage (%) that makes an account limited.
+stickiness = 10            # Points within the best score that keep the last account.
 ```
 
 Put email addresses only in the overlay file `config.local.toml`. ccx reads it from `$XDG_CONFIG_HOME/ccx/`, or from `~/.config/ccx/`. ccx merges the overlay over `config.toml`. Do not commit the overlay. Give it mode 0600.
@@ -237,7 +256,7 @@ Issue #3 has the full configuration schema.
 | `CCX_DEPTH` | Internal. ccx stops with an error when `claude` starts ccx again too many times. |
 | `CCX_DRY_RUN=1` | Input. Show the account, the environment changes and the arguments. Do not start `claude`. |
 
-ccx removes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` before it starts `claude`, because they override the account login. On a terminal, ccx shows one warning for each variable that it removes. When stdout or stderr is not a terminal, ccx shows no banner and no warnings.
+ccx removes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` before it starts `claude`, because they override the account login. On a terminal, ccx shows one warning for each variable that it removes. When stdout or stderr is not a terminal, or for `-p` runs, ccx shows no banner and no warnings.
 
 If ccx cannot start `claude`, it exits with code 127.
 
