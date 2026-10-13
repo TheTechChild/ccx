@@ -182,9 +182,12 @@ You can run bootstrap again. A step that is done already shows OK and changes no
 ### Adopt the accounts on this machine
 
 ```sh
-ccx manage adopt      # Show the plan, then ask for confirmation.
-ccx manage adopt -y   # Do not ask. Use this in scripts.
+ccx manage adopt                                      # On a terminal: start the wizard.
+ccx manage adopt -y                                   # Do not ask. Use this in scripts.
+ccx manage adopt --rename angel2=work --skip test -y  # Change a name, skip a directory.
 ```
+
+On a terminal with no `-y`, `--rename` or `--skip`, adopt starts a wizard. For each directory that is not in the config, you select one of these: adopt it with its name, adopt it with a different name, or skip it. Then adopt shows the summary. `--rename OLD=NEW` and `--skip NAME` give the same choices in scripts. OLD and NAME are the names that adopt found, for example `angel2` for `~/.claude-angel2`. You can give each flag more than one time.
 
 `ccx manage adopt` finds `~/.claude` (the base account, name `main`) and each `~/.claude-<name>` directory. For each directory, it runs `claude auth status --json` to get the email. For the base account, `CLAUDE_CONFIG_DIR` is not set. For the other accounts, `CLAUDE_CONFIG_DIR` is the directory of the account.
 
@@ -203,6 +206,7 @@ You can run adopt again. It adds only the accounts and the emails that are not i
 ### Add a new account
 
 ```sh
+ccx manage add                                 # On a terminal: start the wizard.
 ccx manage add work                            # Show the plan, then ask for confirmation.
 ccx manage add work --email user@example.com   # Give the email to `claude auth login`.
 ccx manage add work --dir ~/accounts/work      # Use a different directory.
@@ -210,6 +214,8 @@ ccx manage add work --no-login                 # Do not log in.
 ccx manage add work --no-prefs                 # Do not copy the MCP servers and the preferences.
 ccx manage add work -y                         # Do not ask. Use this in scripts.
 ```
+
+With no NAME on a terminal, add starts a wizard. The wizard asks for the name, then the directory (the default is `~/.claude-NAME`). It shows the items that sync links. Then it asks if you want to log in now, for the email, and if you want to copy the MCP servers and the preferences. Then add shows the plan and asks for confirmation. At the end, add shows a summary with the email and the tier. Each wizard value has a flag. With no NAME and no terminal, add fails and shows the flags. Push Esc or Ctrl-C to stop the wizard. The wizard changes nothing before the last confirmation.
 
 `ccx manage add NAME` makes a new account in one step. The name must match `^[a-z0-9][a-z0-9_-]*$`. Add refuses a name or a directory that an account in the config uses. Add shows the plan and changes nothing until you confirm. When there is no terminal and you do not give `-y`, add stops and changes nothing.
 
@@ -221,7 +227,7 @@ After you confirm, add does these steps:
 4. It runs `claude auth status --json` in the new account and compares the email with `--email`. If the emails are different, add shows a warning and asks before it writes the config. When there is no terminal, add stops and does not change the config.
 5. It adds the account (the name and the directory) to `config.toml`. `config.toml` gets no email addresses.
 6. It writes the email only to `config.local.toml`, with mode 0600.
-7. It shows the kind, the tier and the weight that automatic selection uses, for example `work: kind max, tier Max 5x, weight 5`. An unknown tier shows the raw value.
+7. It shows a summary with the directory and the email. Then it shows the kind, the tier and the weight that automatic selection uses, for example `work: kind max, tier Max 5x, weight 5`. An unknown tier shows the raw value.
 8. It copies the user MCP servers and the allowlisted preferences of the base account into the new account, as `ccx manage sync --prefs` does. With `--no-prefs` or `--no-login`, add does not do this step. If this step fails, add shows a warning. Run `ccx manage sync --prefs NAME` to try again.
 
 Add keeps the other entries and the comments in the two files. It writes each file to a temporary file and then renames it. Add never reads or keeps the Claude Code credentials. Only `claude auth login` touches them.
@@ -275,12 +281,15 @@ ccx never reads, keeps or refreshes the Claude Code credentials. Only `claude au
 ### Change an account
 
 ```sh
+ccx manage edit                              # On a terminal: start the wizard.
 ccx manage edit work --weight 5              # Change the weight for automatic selection.
 ccx manage edit work --disable               # Do not use the account for automatic selection.
 ccx manage edit work --enable
 ccx manage edit work --email user@example.com # Change the expected email.
 ccx manage edit-config                       # Open config.toml in $EDITOR.
 ```
+
+With no NAME on a terminal, edit starts a wizard. You select the account. The wizard shows the current values and asks for the email, the weight and if automatic selection uses the account. Then it shows a summary and asks before it writes.
 
 `ccx manage edit NAME` changes only the fields that you give. It keeps the other entries, the order and the comments. It validates the two files before it writes them. It refuses a value that is not valid, for example a weight of 0 or less. `--email` writes the email only to `config.local.toml` (mode 0600). `config.toml` never gets an email.
 
@@ -289,6 +298,7 @@ ccx manage edit-config                       # Open config.toml in $EDITOR.
 ### Remove an account
 
 ```sh
+ccx manage rm                     # On a terminal: start the wizard.
 ccx manage rm work                # Remove the account from the config. Keep the directory.
 ccx manage rm work --purge        # Also log out and move the directory to the trash.
 ccx manage rm work --purge -y     # Do not ask. Use this in scripts.
@@ -303,6 +313,8 @@ With `--purge`, rm also does these steps:
 3. It moves the directory to `~/.local/state/ccx/trash/NAME-<time>`. The trash directory has mode 0700. ccx never deletes the directory. To delete it, remove it from the trash yourself.
 
 Rm refuses the base account `~/.claude`.
+
+With no NAME on a terminal, rm starts a wizard. You select the account and select if you want the purge. Then rm shows the plan. Before a purge, you must type the account name to confirm.
 
 ### List the accounts
 

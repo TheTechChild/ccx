@@ -44,10 +44,12 @@ _arguments "${_arguments_options[@]}" : \
         case $line[1] in
             (adopt)
 _arguments "${_arguments_options[@]}" : \
+'*--rename=[Adopt the found account OLD with the name NEW, for example \`--rename angel2=work\`. You can give it more than one time]:OLD=NEW:_default' \
+'*--skip=[Do not adopt the found account NAME. You can give it more than one time]:NAME:_default' \
 '-y[Confirm the changes without a prompt]' \
 '--yes[Confirm the changes without a prompt]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (add)
@@ -63,7 +65,7 @@ _arguments "${_arguments_options[@]}" : \
 '(--key-command)--key-file[With \`--api-key\`\: keep the key in \`~/.config/ccx/keys/NAME\` at mode 0600, not in the OS secret store]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-':name -- The account name. It must match `^\[a-z0-9\]\[a-z0-9_-\]*$`:_default' \
+'::name -- The account name. It must match `^\[a-z0-9\]\[a-z0-9_-\]*$`:_default' \
 && ret=0
 ;;
 (login)
@@ -91,7 +93,7 @@ _arguments "${_arguments_options[@]}" : \
 '--disable[Do not use the account for automatic selection]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-':name -- The account to change:_default' \
+'::name -- The account to change:_default' \
 && ret=0
 ;;
 (edit-config)
@@ -107,7 +109,7 @@ _arguments "${_arguments_options[@]}" : \
 '--yes[Confirm the plan without a prompt]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-':name -- The account to remove:_default' \
+'::name -- The account to remove:_default' \
 && ret=0
 ;;
 (bootstrap)

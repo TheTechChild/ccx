@@ -206,12 +206,20 @@ _ccx() {
             return 0
             ;;
         ccx__subcmd__manage__subcmd__adopt)
-            opts="-y -h --yes --help"
+            opts="-y -h --yes --rename --skip --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --rename)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --skip)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;

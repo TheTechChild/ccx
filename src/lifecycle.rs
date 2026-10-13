@@ -27,6 +27,7 @@ use crate::keystore;
 use crate::launch;
 use crate::status;
 use crate::usage;
+use crate::wizard::{Ask, Prompt, Step, Stop};
 
 /// The timeout of `claude auth status --json`.
 const STATUS_TIMEOUT: Duration = Duration::from_secs(30);
@@ -264,7 +265,7 @@ fn run_claude(claude: &Path, env: &Env, args: &[&str]) -> Result<()> {
 }
 
 /// The changes of `ccx manage edit`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Edit {
     pub email: Option<String>,
     pub weight: Option<f64>,
@@ -458,8 +459,165 @@ fn mode_of(path: &Path) -> u32 {
         .unwrap_or(CONFIG_MODE)
 }
 
-/// `ccx manage rm NAME [--purge]`.
-pub fn rm(parent: &Env, name: &str, purge: bool, yes: bool) -> Result<()> {
+/// The usage line that names the flags of `ccx manage edit`.
+pub const EDIT_USAGE: &str =
+    "ccx manage edit NAME [--email EMAIL] [--weight N] [--enable | --disable]";
+/// The usage line that names the flags of `ccx manage rm`.
+pub const RM_USAGE: &str = "ccx manage rm NAME [--purge] -y";
+
+/// The accounts that a wizard can select, as `name (dir)`.
+fn account_items(accounts: &[&Account]) -> Vec<String> {
+    accounts
+        .iter()
+        .map(|a| format!("{} ({})", a.name, a.dir_text))
+        .collect()
+}
+
+/// `ccx manage edit` with no name on a terminal: the edit wizard.
+pub fn edit_wizard(parent: &Env, p: &mut dyn Prompt) -> Step<()> {
+    let setup = Setup::load(parent)?;
+    let overlay = adopt::read_doc(&setup.overlay_path)?;
+    let accounts: Vec<&Account> = setup.config.accounts.iter().collect();
+    p.show("ccx manage edit: change an account. Push Esc or Ctrl-C to stop. Nothing changes before the summary.");
+    let index = p.select("The account to change", &account_items(&accounts), 0)?;
+    let account = accounts[index];
+    let email = adopt::email_of(&overlay, &account.name);
+    let edit = ask_edit(p, account, email)?;
+    if edit.email.is_none() && edit.weight.is_none() && edit.enabled.is_none() {
+        p.show("No change.");
+        return Ok(());
+    }
+    p.show(&format!("Summary for account {}:", account.name));
+    for line in edit_summary(&edit) {
+        p.show(&format!("  - {line}"));
+    }
+    if !p.confirm("Write these changes?", false)? {
+        p.show("Nothing changed.");
+        return Ok(());
+    }
+    self::edit(parent, &account.name, &edit).map_err(Stop::Fail)
+}
+
+/// The steps of the edit wizard. Each step shows the current value as the
+/// default. Returns only the fields that change, the same as the flags.
+pub fn ask_edit(p: &mut dyn Prompt, account: &Account, email: Option<&str>) -> Step<Edit> {
+    p.show(&format!(
+        "Account {}: dir {}, email {}, weight {}, enabled {}",
+        account.name,
+        account.dir_text,
+        email.unwrap_or("-"),
+        account
+            .weight
+            .map_or_else(|| "from the tier".to_string(), |w| w.to_string()),
+        account.enabled
+    ));
+    let new_email = p.text(
+        "Step 1 of 3: the expected email (empty for no change)",
+        email,
+        &|text| {
+            if text.is_empty() || valid_email(text) {
+                Ok(())
+            } else {
+                Err(format!("`{text}` is not a valid email address"))
+            }
+        },
+    )?;
+    let weight_text = account.weight.map(|w| w.to_string());
+    let new_weight = p.text(
+        "Step 2 of 3: the weight (empty for the tier weight)",
+        weight_text.as_deref(),
+        &|text| match text {
+            "" => Ok(()),
+            text => match text.parse::<f64>() {
+                Ok(w) if w.is_finite() && w > 0.0 => Ok(()),
+                _ => Err(format!("`{text}` is not a positive number")),
+            },
+        },
+    )?;
+    let enabled = p.confirm(
+        "Step 3 of 3: use the account for automatic selection?",
+        account.enabled,
+    )?;
+    let weight = new_weight.parse::<f64>().ok();
+    Ok(Edit {
+        email: (!new_email.is_empty() && Some(new_email.as_str()) != email).then_some(new_email),
+        weight: weight.filter(|w| Some(*w) != account.weight),
+        enabled: (enabled != account.enabled).then_some(enabled),
+    })
+}
+
+/// One line for each field that `edit` changes.
+pub fn edit_summary(edit: &Edit) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(email) = &edit.email {
+        lines.push(format!("set the email to {email} (in config.local.toml)"));
+    }
+    if let Some(weight) = edit.weight {
+        lines.push(format!("set the weight to {weight}"));
+    }
+    if let Some(enabled) = edit.enabled {
+        lines.push(format!("set enabled to {enabled}"));
+    }
+    lines
+}
+
+/// `ccx manage rm` with no name on a terminal: the rm wizard. With the
+/// purge, the user must type the account name to confirm.
+pub fn rm_wizard(parent: &Env, purge: bool, p: &mut dyn Prompt) -> Step<()> {
+    let setup = Setup::load(parent)?;
+    let (name, purge) = ask_rm(p, &setup.config, purge)?;
+    let mut ask = Ask::Wizard(p);
+    rm(parent, &name, purge, &mut ask).map_err(Stop::Fail)
+}
+
+/// The steps of the rm wizard: the account and the purge. Returns the same
+/// values as the flags `NAME` and `--purge`. `purge` is the default.
+pub fn ask_rm(p: &mut dyn Prompt, config: &Config, purge: bool) -> Step<(String, bool)> {
+    let accounts: Vec<&Account> = config.accounts.iter().filter(|a| !a.is_base).collect();
+    if accounts.is_empty() {
+        return Err(Stop::Fail(
+            "there is no account to remove; ccx manage rm does not remove the base account".into(),
+        ));
+    }
+    p.show("ccx manage rm: remove an account from the config. Push Esc or Ctrl-C to stop. Nothing changes before the summary.");
+    let index = p.select(
+        "Step 1 of 2: the account to remove",
+        &account_items(&accounts),
+        0,
+    )?;
+    let purge = p.confirm(
+        "Step 2 of 2: also purge (log out, delete the credentials file, move the dir to the trash)?",
+        purge,
+    )?;
+    Ok((accounts[index].name.clone(), purge))
+}
+
+/// The last question of rm. The wizard asks the user to type the account
+/// name before a purge.
+fn confirm_rm(ask: &mut Ask, name: &str, purge: bool, retry: &str) -> Result<bool> {
+    let Ask::Wizard(p) = ask else {
+        return ask.confirm("Continue?", retry);
+    };
+    if !purge {
+        return ask.confirm("Continue?", retry);
+    }
+    let check = |text: &str| {
+        if text == name {
+            Ok(())
+        } else {
+            Err(format!("type `{name}` to confirm, or push Ctrl-C to stop"))
+        }
+    };
+    match p.text(&format!("Type `{name}` to purge the account"), None, &check) {
+        Ok(_) => Ok(true),
+        Err(Stop::Cancel) => Ok(false),
+        Err(Stop::Fail(e)) => Err(e),
+    }
+}
+
+/// `ccx manage rm NAME [--purge]`. `ask` gives the confirm before the
+/// first change.
+pub fn rm(parent: &Env, name: &str, purge: bool, ask: &mut Ask) -> Result<()> {
     let setup = Setup::load(parent)?;
     let account = setup.account(name)?;
     if account.is_base {
@@ -497,7 +655,7 @@ pub fn rm(parent: &Env, name: &str, purge: bool, yes: bool) -> Result<()> {
         "ccx manage rm {name}{} -y",
         if purge { " --purge" } else { "" }
     );
-    if !adopt::confirm(yes, "Continue?", &retry)? {
+    if !confirm_rm(ask, name, purge, &retry)? {
         println!("Nothing changed.");
         return Ok(());
     }
@@ -819,5 +977,140 @@ stickiness = 5
         assert_ne!(moved[0], moved[1]);
         let mode = fs::metadata(&trash).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
+    }
+
+    use crate::wizard::Stop;
+    use crate::wizard::fake::{Reply, Script};
+
+    fn parsed(home: &str) -> Config {
+        config::parse(
+            &config::Source {
+                path: Path::new("config.toml"),
+                text: CONFIG,
+            },
+            None,
+            OsStr::new(home),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn rm_wizard_gives_the_same_values_as_the_flags() {
+        let config = parsed("/home/test");
+        let mut p = Script::new([Reply::Pick(0), Reply::Yes]);
+        // `ccx manage rm work --purge`: the base account is not offered.
+        assert_eq!(ask_rm(&mut p, &config, false), Ok(("work".into(), true)));
+        assert!(p.text_log().contains("? Step 1 of 2"));
+        let mut p = Script::new([Reply::Pick(0), Reply::No]);
+        assert_eq!(ask_rm(&mut p, &config, true), Ok(("work".into(), false)));
+        let mut p = Script::new([Reply::Esc]);
+        assert_eq!(ask_rm(&mut p, &config, false), Err(Stop::Cancel));
+    }
+
+    #[test]
+    fn rm_wizard_asks_to_type_the_name_before_a_purge() {
+        let mut p = Script::new([Reply::Text("wrok"), Reply::Text("work")]);
+        let mut ask = Ask::Wizard(&mut p);
+        assert_eq!(confirm_rm(&mut ask, "work", true, ""), Ok(true));
+        assert!(p.text_log().contains("? Type `work` to purge the account"));
+        assert!(p.text_log().contains("error: type `work` to confirm"));
+        let mut p = Script::new([Reply::Esc]);
+        assert_eq!(
+            confirm_rm(&mut Ask::Wizard(&mut p), "work", true, ""),
+            Ok(false)
+        );
+        // With no purge, a yes/no is enough.
+        let mut p = Script::new([Reply::Yes]);
+        assert_eq!(
+            confirm_rm(&mut Ask::Wizard(&mut p), "work", false, ""),
+            Ok(true)
+        );
+        assert_eq!(
+            confirm_rm(&mut Ask::Flags { yes: true }, "work", true, ""),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn edit_wizard_gives_the_same_edit_as_the_flags() {
+        let config = parsed("/home/test");
+        let work = config.account("work").unwrap();
+        let mut p = Script::new([
+            Reply::Text("nope"),
+            Reply::Text("w@example.com"),
+            Reply::Text("-1"),
+            Reply::Text("5"),
+            Reply::No,
+        ]);
+        let got = ask_edit(&mut p, work, None).unwrap();
+        assert!(p.done());
+        let log = p.text_log();
+        assert!(log.contains("Account work: dir ~/.claude-work, email -, weight 2, enabled true"));
+        assert!(
+            log.contains("error: `-1` is not a positive number"),
+            "{log}"
+        );
+        // `ccx manage edit work --email w@example.com --weight 5 --disable`
+        let flags = Edit {
+            email: Some("w@example.com".into()),
+            weight: Some(5.0),
+            enabled: Some(false),
+        };
+        assert_eq!(got, flags);
+        assert_eq!(
+            edit_summary(&got),
+            [
+                "set the email to w@example.com (in config.local.toml)",
+                "set the weight to 5",
+                "set enabled to false"
+            ]
+        );
+        // The defaults are the current values: no change.
+        let mut p = Script::new([Reply::Text(""), Reply::Text(""), Reply::Yes]);
+        let got = ask_edit(&mut p, work, Some("w@example.com")).unwrap();
+        assert_eq!(got, Edit::default());
+    }
+
+    /// End to end: the rm wizard with a purge and the fake claude.
+    #[test]
+    fn rm_wizard_end_to_end() {
+        let home = tempfile::tempdir().unwrap();
+        let config_dir = home.path().join(".config/ccx");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("config.toml"), CONFIG).unwrap();
+        fs::create_dir(home.path().join(".claude")).unwrap();
+        let work = home.path().join(".claude-work");
+        fs::create_dir(&work).unwrap();
+        let fakebin = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/fakebin");
+        let env: Env = [
+            ("HOME", home.path().as_os_str().to_owned()),
+            (
+                "PATH",
+                format!("{}:/usr/bin:/bin", fakebin.display()).into(),
+            ),
+        ]
+        .into_iter()
+        .collect();
+
+        // Esc at the typed confirm changes nothing.
+        let mut p = Script::new([Reply::Pick(0), Reply::Yes, Reply::Esc]);
+        rm_wizard(&env, false, &mut p).unwrap();
+        assert_eq!(
+            fs::read_to_string(config_dir.join("config.toml")).unwrap(),
+            CONFIG
+        );
+        assert!(work.is_dir());
+
+        let mut p = Script::new([Reply::Pick(0), Reply::Yes, Reply::Text("work")]);
+        rm_wizard(&env, false, &mut p).unwrap();
+        let text = fs::read_to_string(config_dir.join("config.toml")).unwrap();
+        assert!(!text.contains("accounts.work"), "{text}");
+        assert!(!work.exists());
+        assert_eq!(
+            fs::read_dir(trash_dir(home.path().as_os_str()))
+                .unwrap()
+                .count(),
+            1
+        );
     }
 }

@@ -21,6 +21,7 @@ mod shell_init;
 mod status;
 mod sync;
 mod usage;
+mod wizard;
 
 use std::ffi::OsString;
 use std::io::IsTerminal;
@@ -100,10 +101,22 @@ enum Own {
 #[derive(Debug, Subcommand)]
 enum Manage {
     /// Find the accounts on this machine and write them into the config.
+    ///
+    /// On a terminal with no `-y`, `--rename` or `--skip`, adopt starts a
+    /// wizard: for each found account, you keep the name, give a different
+    /// name or skip it. Then adopt shows a summary before any change.
     Adopt {
         /// Confirm the changes without a prompt.
         #[arg(short, long)]
         yes: bool,
+        /// Adopt the found account OLD with the name NEW, for example
+        /// `--rename angel2=work`. You can give it more than one time.
+        #[arg(long, value_name = "OLD=NEW", value_parser = adopt::parse_rename)]
+        rename: Vec<(String, String)>,
+        /// Do not adopt the found account NAME. You can give it more than
+        /// one time.
+        #[arg(long, value_name = "NAME")]
+        skip: Vec<String>,
     },
     /// Make a new account: the dir, the sync links, the login and the
     /// config entry.
@@ -113,9 +126,12 @@ enum Manage {
     /// account. It compares the email of the login with `--email`. It
     /// writes the account to `config.toml` and the email only to
     /// `config.local.toml`. Then it shows the kind, the tier and the weight.
+    ///
+    /// With no NAME on a terminal, add starts a wizard. It asks for the
+    /// name, the dir, the login and the email, one step at a time.
     Add {
         /// The account name. It must match `^[a-z0-9][a-z0-9_-]*$`.
-        name: String,
+        name: Option<String>,
         /// The account dir. The default is `~/.claude-NAME`.
         #[arg(long)]
         dir: Option<String>,
@@ -173,10 +189,11 @@ enum Manage {
     ///
     /// Edit changes only the given fields and keeps the comments and the
     /// order. `--email` goes only into `config.local.toml`. The other
-    /// fields go into `config.toml`.
+    /// fields go into `config.toml`. With no NAME on a terminal, edit starts
+    /// a wizard that shows the current values.
     Edit {
         /// The account to change.
-        name: String,
+        name: Option<String>,
         /// The expected email of the login.
         #[arg(long)]
         email: Option<String>,
@@ -200,10 +217,11 @@ enum Manage {
     /// yourself. With `--purge`, rm also runs `claude auth logout`,
     /// deletes the credentials file of the account and moves the dir into
     /// `~/.local/state/ccx/trash/`. Rm never deletes the dir. Rm refuses
-    /// the base account.
+    /// the base account. With no NAME on a terminal, rm starts a wizard.
+    /// Before a purge, the wizard asks you to type the account name.
     Rm {
         /// The account to remove.
-        name: String,
+        name: Option<String>,
         /// Also log out, delete the credentials file and move the dir into
         /// the trash.
         #[arg(long)]
@@ -349,7 +367,17 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
         Own::Manage { command } => {
             let env = Env::from_process();
             match command {
-                Manage::Adopt { yes } => adopt::run(&env, yes)?,
+                Manage::Adopt { yes, rename, skip } => {
+                    let choices = adopt::Choices {
+                        rename: rename.into_iter().collect(),
+                        skip: skip.into_iter().collect(),
+                    };
+                    if !yes && choices.is_empty() && wizard::available() {
+                        wizard::finish(adopt::run_wizard(&env, &mut wizard::Terminal))?;
+                    } else {
+                        adopt::run(&env, &choices, &mut wizard::Ask::Flags { yes })?;
+                    }
+                }
                 Manage::Add {
                     name,
                     dir,
@@ -360,10 +388,9 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
                     api_key,
                     key_command,
                     key_file,
-                } => add::run(
-                    &env,
-                    &add::Args {
-                        name,
+                } => {
+                    let args = add::Args {
+                        name: name.clone().unwrap_or_default(),
                         dir,
                         email,
                         no_login,
@@ -372,8 +399,20 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
                         api_key,
                         key_command,
                         key_file,
-                    },
-                )?,
+                    };
+                    match name {
+                        Some(_) => add::run(&env, &args, &mut wizard::Ask::Flags { yes })?,
+                        None if wizard::available() => {
+                            wizard::finish(add::run_wizard(&env, &args, &mut wizard::Terminal))?
+                        }
+                        None => {
+                            return Err(wizard::no_terminal(
+                                "missing the account name NAME",
+                                add::USAGE,
+                            ));
+                        }
+                    }
+                }
                 Manage::Login { name, all: _ } => {
                     if !lifecycle::login(&env, name.as_deref())? {
                         return Ok(ExitCode::FAILURE);
@@ -386,17 +425,40 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
                     weight,
                     enable,
                     disable,
-                } => lifecycle::edit(
-                    &env,
-                    &name,
-                    &lifecycle::Edit {
+                } => {
+                    let edit = lifecycle::Edit {
                         email,
                         weight,
                         enabled: (enable || disable).then_some(enable),
-                    },
-                )?,
+                    };
+                    match name {
+                        Some(name) => lifecycle::edit(&env, &name, &edit)?,
+                        None if wizard::available() => {
+                            wizard::finish(lifecycle::edit_wizard(&env, &mut wizard::Terminal))?
+                        }
+                        None => {
+                            return Err(wizard::no_terminal(
+                                "missing the account name NAME",
+                                lifecycle::EDIT_USAGE,
+                            ));
+                        }
+                    }
+                }
                 Manage::EditConfig => lifecycle::edit_config(&env)?,
-                Manage::Rm { name, purge, yes } => lifecycle::rm(&env, &name, purge, yes)?,
+                Manage::Rm { name, purge, yes } => match name {
+                    Some(name) => {
+                        lifecycle::rm(&env, &name, purge, &mut wizard::Ask::Flags { yes })?
+                    }
+                    None if wizard::available() => {
+                        wizard::finish(lifecycle::rm_wizard(&env, purge, &mut wizard::Terminal))?
+                    }
+                    None => {
+                        return Err(wizard::no_terminal(
+                            "missing the account name NAME",
+                            lifecycle::RM_USAGE,
+                        ));
+                    }
+                },
                 Manage::Bootstrap {
                     service,
                     no_service,

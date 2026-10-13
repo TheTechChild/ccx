@@ -4,6 +4,7 @@
 //! Adopt writes nothing until the user confirms. `config.toml` gets the
 //! account dirs and never an email. The emails go only into the overlay.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{IsTerminal, Write as _};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -17,6 +18,7 @@ use crate::config::{self, Account, BASE_DIR, Result, Source};
 use crate::env::Env;
 use crate::launch;
 use crate::paths::canonical;
+use crate::wizard::{Ask, Prompt, Step, Stop};
 
 /// The name that adopt gives to the base account `~/.claude`.
 pub const BASE_NAME: &str = "main";
@@ -40,20 +42,187 @@ pub struct Found {
     pub dir_text: String,
 }
 
-/// Runs `ccx manage adopt`. `yes` confirms without a prompt.
-pub fn run(parent: &Env, yes: bool) -> Result<()> {
-    let home = PathBuf::from(config::home(parent)?);
-    let config_path = config::config_path(parent)?;
-    let overlay_path = config::overlay_path(parent)?;
-    let mut main = read_doc(&config_path)?;
-    let mut overlay = read_doc(&overlay_path)?;
-    let (found, mut notes) = discover(&home)?;
+/// The choices for the found accounts: a different name or a skip. The
+/// key is the proposed name of [`Found`]. The flags `--rename OLD=NEW` and
+/// `--skip NAME` and the adopt wizard both give this value.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Choices {
+    pub rename: BTreeMap<String, String>,
+    pub skip: BTreeSet<String>,
+}
+
+impl Choices {
+    pub fn is_empty(&self) -> bool {
+        self.rename.is_empty() && self.skip.is_empty()
+    }
+}
+
+/// Parses the value of `--rename OLD=NEW`.
+pub fn parse_rename(text: &str) -> std::result::Result<(String, String), String> {
+    match text.split_once('=') {
+        Some((old, new)) if !old.is_empty() && !new.is_empty() => {
+            Ok((old.to_string(), new.to_string()))
+        }
+        _ => Err(format!("`{text}` must be OLD=NEW, for example angel2=work")),
+    }
+}
+
+/// Finds the accounts and refuses a HOME with no base account.
+fn discover_with_base(home: &Path) -> Result<(Vec<Found>, Vec<String>)> {
+    let (found, notes) = discover(home)?;
     if !found.iter().any(|f| f.dir_text == BASE_DIR) {
         return Err(format!(
             "cannot find the base account {}",
             home.join(".claude").display()
         ));
     }
+    Ok((found, notes))
+}
+
+/// Applies `choices` to the found accounts. Returns the accounts to adopt
+/// with their names, and a note for each skip. Each choice must name a
+/// found account that is not in the config already.
+pub fn choose(
+    found: &[Found],
+    main: &DocumentMut,
+    home: &Path,
+    choices: &Choices,
+) -> Result<(Vec<Found>, Vec<String>)> {
+    let names: Vec<&str> = found.iter().map(|f| f.name.as_str()).collect();
+    for name in choices.rename.keys().chain(&choices.skip) {
+        let Some(f) = found.iter().find(|f| &f.name == name) else {
+            return Err(format!(
+                "adopt found no account `{name}`; it found: {}",
+                names.join(", ")
+            ));
+        };
+        let dir = canonical(&f.dir_text, home.as_os_str());
+        if let Some(have) = name_for_dir(main, &dir, home) {
+            return Err(format!(
+                "{} is in the config already as `{have}`; to change it, run `ccx manage edit-config`",
+                f.dir_text
+            ));
+        }
+    }
+    let mut chosen: Vec<Found> = Vec::new();
+    let mut notes = Vec::new();
+    for f in found {
+        if choices.skip.contains(&f.name) {
+            notes.push(format!("skip {}: you chose to skip it", f.dir_text));
+            continue;
+        }
+        let name = choices.rename.get(&f.name).unwrap_or(&f.name);
+        if !config::valid_name(name) {
+            return Err(format!(
+                "`{name}` is not a valid account name; the name must match ^[a-z0-9][a-z0-9_-]*$"
+            ));
+        }
+        if choices.rename.contains_key(&f.name) && has_account(main, name) {
+            return Err(format!("the name `{name}` is in the config already"));
+        }
+        if let Some(other) = chosen.iter().find(|c| &c.name == name) {
+            return Err(format!(
+                "{} and {} cannot both have the name `{name}`",
+                other.dir_text, f.dir_text
+            ));
+        }
+        chosen.push(Found {
+            name: name.clone(),
+            dir_text: f.dir_text.clone(),
+        });
+    }
+    Ok((chosen, notes))
+}
+
+/// The steps of the adopt wizard: for each found account that is not in
+/// the config, adopt it with its name, with a different name, or skip it.
+pub fn ask_choices(
+    p: &mut dyn Prompt,
+    found: &[Found],
+    main: &DocumentMut,
+    home: &Path,
+) -> Step<Choices> {
+    let mut choices = Choices::default();
+    // The names in use: the config, and the names chosen so far.
+    let mut taken: BTreeSet<String> = found
+        .iter()
+        .filter_map(|f| name_for_dir(main, &canonical(&f.dir_text, home.as_os_str()), home))
+        .collect();
+    let new: Vec<&Found> = found
+        .iter()
+        .filter(|f| {
+            let dir = canonical(&f.dir_text, home.as_os_str());
+            match name_for_dir(main, &dir, home) {
+                Some(name) => {
+                    p.show(&format!("{}: in the config as `{name}`", f.dir_text));
+                    false
+                }
+                None => true,
+            }
+        })
+        .collect();
+    for (n, f) in new.iter().enumerate() {
+        let used = has_account(main, &f.name) || taken.contains(&f.name);
+        let keep = format!("adopt as `{}`", f.name);
+        let mut items = vec![keep, "adopt with a different name".into(), "skip".into()];
+        if used {
+            items.remove(0);
+            p.show(&format!(
+                "{}: the name `{}` is in use; give a different name or skip it",
+                f.dir_text, f.name
+            ));
+        }
+        let prompt = format!("Account {} of {}: {}", n + 1, new.len(), f.dir_text);
+        let picked = p.select(&prompt, &items, 0)? + usize::from(used);
+        match picked {
+            0 => {
+                taken.insert(f.name.clone());
+            }
+            1 => {
+                let check = |name: &str| {
+                    if !config::valid_name(name) {
+                        Err(format!(
+                            "`{name}` is not a valid account name; use ^[a-z0-9][a-z0-9_-]*$"
+                        ))
+                    } else if has_account(main, name) || taken.contains(name) {
+                        Err(format!("the name `{name}` is in use"))
+                    } else {
+                        Ok(())
+                    }
+                };
+                let name = p.text(&format!("The name for {}", f.dir_text), None, &check)?;
+                taken.insert(name.clone());
+                choices.rename.insert(f.name.clone(), name);
+            }
+            _ => {
+                choices.skip.insert(f.name.clone());
+            }
+        }
+    }
+    Ok(choices)
+}
+
+/// `ccx manage adopt` on a terminal with no `-y`: the adopt wizard. The
+/// summary and the confirm come before any change.
+pub fn run_wizard(parent: &Env, p: &mut dyn Prompt) -> Step<()> {
+    let home = PathBuf::from(config::home(parent)?);
+    let main = read_doc(&config::config_path(parent)?)?;
+    let (found, _) = discover_with_base(&home)?;
+    p.show("ccx manage adopt: choose a name for each account, or skip it. Push Esc or Ctrl-C to stop. Nothing changes before the summary.");
+    let choices = ask_choices(p, &found, &main, &home)?;
+    run(parent, &choices, &mut Ask::Wizard(p)).map_err(Stop::Fail)
+}
+
+/// Runs `ccx manage adopt`. `ask` gives the confirm before the changes.
+pub fn run(parent: &Env, choices: &Choices, ask: &mut Ask) -> Result<()> {
+    let home = PathBuf::from(config::home(parent)?);
+    let config_path = config::config_path(parent)?;
+    let overlay_path = config::overlay_path(parent)?;
+    let mut main = read_doc(&config_path)?;
+    let mut overlay = read_doc(&overlay_path)?;
+    let (found, mut notes) = discover_with_base(&home)?;
+    let (found, skipped) = choose(&found, &main, &home, choices)?;
+    notes.extend(skipped);
 
     let claude_bin = main
         .get("launch")
@@ -150,7 +319,7 @@ pub fn run(parent: &Env, yes: bool) -> Result<()> {
         home.as_os_str(),
     )?;
 
-    if !confirm(yes, "Write these changes?", "ccx manage adopt -y")? {
+    if !ask.confirm("Write these changes?", "ccx manage adopt -y")? {
         println!("Nothing written.");
         return Ok(());
     }
@@ -587,5 +756,159 @@ mod tests {
             backup_root(&env, home),
             PathBuf::from("/home/test/.local/state/ccx/backup")
         );
+    }
+
+    use crate::wizard::Stop;
+    use crate::wizard::fake::{Reply, Script};
+
+    fn all_found() -> Vec<Found> {
+        vec![
+            found("main", "~/.claude"),
+            found("angel2", "~/.claude-angel2"),
+            found("other", "~/.claude-other"),
+            found("zeta", "~/.claude-zeta"),
+        ]
+    }
+
+    const MAIN: &str = "[accounts.main]\ndir = \"~/.claude\"\n";
+
+    #[test]
+    fn wizard_gives_the_same_choices_as_the_flags() {
+        let main: DocumentMut = MAIN.parse().unwrap();
+        let home = Path::new("/home/test");
+        let mut p = Script::new([
+            // angel2: a different name. `main` is in use, `Bad` is not valid.
+            Reply::Pick(1),
+            Reply::Text("main"),
+            Reply::Text("Bad"),
+            Reply::Text("work"),
+            // other: keep the name.
+            Reply::Pick(0),
+            // zeta: skip.
+            Reply::Pick(2),
+        ]);
+        let got = ask_choices(&mut p, &all_found(), &main, home).unwrap();
+        assert!(p.done());
+        let log = p.text_log();
+        assert!(log.contains("~/.claude: in the config as `main`"), "{log}");
+        assert!(log.contains("? Account 1 of 3: ~/.claude-angel2"), "{log}");
+        assert!(log.contains("error: the name `main` is in use"), "{log}");
+        assert!(log.contains("error: `Bad` is not a valid"), "{log}");
+
+        // `ccx manage adopt --rename angel2=work --skip zeta`
+        let flags = Choices {
+            rename: [("angel2".to_string(), "work".to_string())].into(),
+            skip: ["zeta".to_string()].into(),
+        };
+        assert_eq!(got, flags);
+        let (chosen, notes) = choose(&all_found(), &main, home, &got).unwrap();
+        assert_eq!(
+            (chosen.clone(), notes.clone()),
+            choose(&all_found(), &main, home, &flags).unwrap()
+        );
+        assert_eq!(
+            chosen,
+            [
+                found("main", "~/.claude"),
+                found("work", "~/.claude-angel2"),
+                found("other", "~/.claude-other"),
+            ]
+        );
+        assert_eq!(notes, ["skip ~/.claude-zeta: you chose to skip it"]);
+    }
+
+    #[test]
+    fn wizard_offers_no_keep_for_a_name_in_use() {
+        // A different dir uses the name `angel2` in the config.
+        let main: DocumentMut = format!("{MAIN}[accounts.angel2]\ndir = \"/elsewhere\"\n")
+            .parse()
+            .unwrap();
+        let found = [found("angel2", "~/.claude-angel2")];
+        let home = Path::new("/home/test");
+        // Item 0 is now "adopt with a different name".
+        let mut p = Script::new([Reply::Pick(0), Reply::Text("a3")]);
+        let got = ask_choices(&mut p, &found, &main, home).unwrap();
+        assert!(p.text_log().contains("the name `angel2` is in use"));
+        assert_eq!(got.rename.get("angel2").map(String::as_str), Some("a3"));
+        let mut p = Script::new([Reply::Esc]);
+        assert_eq!(ask_choices(&mut p, &found, &main, home), Err(Stop::Cancel));
+    }
+
+    #[test]
+    fn choose_refuses_bad_choices() {
+        let main: DocumentMut = MAIN.parse().unwrap();
+        let home = Path::new("/home/test");
+        let choices = |rename: &[(&str, &str)], skip: &[&str]| Choices {
+            rename: rename
+                .iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect(),
+            skip: skip.iter().map(|s| s.to_string()).collect(),
+        };
+        let error = |c: Choices| choose(&all_found(), &main, home, &c).unwrap_err();
+        assert!(error(choices(&[("nope", "x")], &[])).contains("found no account `nope`"));
+        assert!(error(choices(&[], &["main"])).contains("in the config already as `main`"));
+        assert!(error(choices(&[("angel2", "Bad")], &[])).contains("not a valid"));
+        assert!(error(choices(&[("angel2", "main")], &[])).contains("in the config already"));
+        assert!(error(choices(&[("angel2", "zeta")], &[])).contains("cannot both have"));
+        // A free name is fine.
+        let (chosen, _) =
+            choose(&all_found(), &main, home, &choices(&[("zeta", "z")], &[])).unwrap();
+        assert!(chosen.contains(&found("z", "~/.claude-zeta")));
+    }
+
+    #[test]
+    fn parse_rename_needs_old_and_new() {
+        assert_eq!(
+            parse_rename("angel2=work"),
+            Ok(("angel2".into(), "work".into()))
+        );
+        for bad in ["angel2", "=work", "angel2=", ""] {
+            assert!(parse_rename(bad).is_err(), "{bad}");
+        }
+    }
+
+    /// End to end: the adopt wizard with the fake claude. Esc at the
+    /// summary writes nothing. A yes writes the chosen names.
+    #[test]
+    fn adopt_wizard_end_to_end() {
+        let home = tempfile::tempdir().unwrap();
+        for dir in [".claude", ".claude-angel2", ".claude-zeta"] {
+            fs::create_dir(home.path().join(dir)).unwrap();
+        }
+        let fakebin = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/fakebin");
+        let env: Env = [
+            ("HOME", home.path().as_os_str().to_owned()),
+            (
+                "PATH",
+                format!("{}:/usr/bin:/bin", fakebin.display()).into(),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let config = home.path().join(".config/ccx/config.toml");
+        let answers = || {
+            vec![
+                Reply::Pick(0),
+                Reply::Pick(1),
+                Reply::Text("work"),
+                Reply::Pick(2),
+            ]
+        };
+
+        let mut p = Script::new(answers().into_iter().chain([Reply::Esc]));
+        run_wizard(&env, &mut p).unwrap();
+        assert!(p.done());
+        assert!(!config.exists());
+
+        let mut p = Script::new(answers().into_iter().chain([Reply::Yes]));
+        run_wizard(&env, &mut p).unwrap();
+        let text = fs::read_to_string(&config).unwrap();
+        assert!(text.contains("[accounts.main]"), "{text}");
+        assert!(
+            text.contains("[accounts.work]\ndir = \"~/.claude-angel2\""),
+            "{text}"
+        );
+        assert!(!text.contains("zeta"), "{text}");
     }
 }
