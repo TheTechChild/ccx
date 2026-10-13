@@ -272,7 +272,7 @@ fn status_fetches_writes_the_cache_and_then_uses_it() {
     assert_eq!(angel2["source"], "/usage");
     assert_eq!(
         angel2["session"],
-        json!({"percent": 5.0, "resets_at": null})
+        json!({"percent": 5.0, "reset": false, "resets_at": null})
     );
     assert_eq!(angel2["weekly"]["percent"], 11.0);
     assert_eq!(angel2["scoped"][0]["model"], "ExampleModel");
@@ -366,6 +366,66 @@ dir = "~/.claude-badjson"
     let row = text.lines().find(|l| l.starts_with("nousage")).unwrap();
     assert!(row.contains("cachedUsageUtilization"), "{text}");
     assert!(row.contains("42%"), "{text}");
+}
+
+#[test]
+fn an_old_fallback_window_that_has_reset_is_not_limited() {
+    let fx = Fixture::new(
+        r#"
+[accounts.main]
+dir = "~/.claude"
+
+[accounts.old]
+dir = "~/.claude-nousage-old"
+
+[accounts.live]
+dir = "~/.claude-nousage-live"
+"#,
+    );
+    // The main fetch works and shows a limited session window. The other
+    // fetches fail, so those accounts use cachedUsageUtilization. The "old"
+    // data is from a session window that reset long ago. The "live" data is
+    // from a window that resets in the future.
+    const MAIN_LIMITS: &str = r#"[{"kind": "session", "percent": 99,
+        "resets_at": "2099-01-01T00:00:00Z"}]"#;
+    let fallback = |resets_at: &str| {
+        json!({"cachedUsageUtilization": {"fetchedAtMs": 1_767_225_600_000u64, "utilization": {
+            "limits": [{"kind": "session", "percent": 95, "resets_at": resets_at, "scope": null}]
+        }}})
+    };
+    fx.write_claude_json(".claude-nousage-old", fallback("2026-01-01T03:00:00Z"));
+    fx.write_claude_json(".claude-nousage-live", fallback("2099-01-01T00:00:00Z"));
+
+    let out = fx
+        .ccx(&["status", "--json"])
+        .env("FAKE_USAGE_LIMITS", MAIN_LIMITS)
+        .output()
+        .unwrap();
+    // Only "old" is usable, so the exit code is 0 and not 3.
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let status: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(account(&status, "main")["limited"], true);
+    let old = account(&status, "old");
+    assert_eq!(old["source"], "cachedUsageUtilization");
+    assert_eq!(old["limited"], false);
+    assert_eq!(
+        old["session"],
+        json!({"percent": null, "reset": true, "resets_at": "2026-01-01T03:00:00Z"})
+    );
+    let live = account(&status, "live");
+    assert_eq!(live["limited"], true);
+    assert_eq!(live["session"]["percent"], 95.0);
+
+    let out = fx
+        .ccx(&["status"])
+        .env("FAKE_USAGE_LIMITS", MAIN_LIMITS)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    let row = text.lines().find(|l| l.starts_with("old")).unwrap();
+    assert!(row.contains("reset"), "{text}");
+    assert!(!row.contains("95%"), "{text}");
 }
 
 #[test]

@@ -11,6 +11,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -66,6 +67,17 @@ pub struct Limit {
     pub resets_at: Option<String>,
     /// The model name of a scoped window (`scope.model.display_name`).
     pub scope: Option<String>,
+}
+
+impl Limit {
+    /// True when `resets_at` is at or before `now_ms`. The percent is then
+    /// from a window that has ended, so it is not the current usage.
+    pub fn has_reset(&self, now_ms: u64) -> bool {
+        self.resets_at
+            .as_deref()
+            .and_then(parse_rfc3339_ms)
+            .is_some_and(|at| at <= now_ms as i64)
+    }
 }
 
 /// Where the usage data came from.
@@ -248,8 +260,11 @@ pub fn write_cache(path: &Path, snapshot: &Snapshot) -> Result<()> {
 }
 
 /// Runs `command` with stdout piped and stdin and stderr closed. It kills
-/// the process after `timeout`. Returns the exit success and the stdout.
+/// the process after `timeout`. The timeout also covers the read of the
+/// stdout, so a descendant process that keeps the pipe open cannot make the
+/// call hang. Returns the exit success and the stdout.
 pub fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<(bool, String)> {
+    let timed_out = || format!("timed out after {}s", timeout.as_secs());
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -257,9 +272,10 @@ pub fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<(bool
         .spawn()
         .map_err(|e| format!("cannot run claude: {e}"))?;
     let mut stdout = child.stdout.take().expect("stdout is piped");
-    let reader = std::thread::spawn(move || {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
         let mut text = String::new();
-        stdout.read_to_string(&mut text).map(|_| text)
+        let _ = sender.send(stdout.read_to_string(&mut text).map(|_| text));
     });
     let deadline = Instant::now() + timeout;
     let status = loop {
@@ -268,15 +284,17 @@ pub fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<(bool
             Ok(None) if Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("timed out after {}s", timeout.as_secs()));
+                return Err(timed_out());
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(10)),
             Err(e) => return Err(format!("cannot wait for claude: {e}")),
         }
     };
-    let text = reader
-        .join()
-        .map_err(|_| "cannot read the claude output".to_string())?
+    // The reader thread stops at EOF. If a descendant keeps the pipe open
+    // after the deadline, the thread is left behind and the call fails.
+    let text = receiver
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .map_err(|_| timed_out())?
         .map_err(|e| format!("cannot read the claude output: {e}"))?;
     Ok((status.success(), text))
 }
@@ -619,5 +637,39 @@ mod tests {
         assert!(ARGS.contains(&"--strict-mcp-config"));
         assert_eq!(ARGS[7..], ["--settings", r#"{"disableAllHooks":true}"#]);
         assert!(!ARGS.contains(&"--bare"));
+    }
+
+    #[test]
+    fn a_window_has_reset_when_resets_at_is_not_in_the_future() {
+        let now = parse_rfc3339_ms("2026-01-01T00:00:00Z").unwrap() as u64;
+        let window = |resets_at: Option<&str>| Limit {
+            kind: Kind::Session,
+            percent: 95.0,
+            resets_at: resets_at.map(String::from),
+            scope: None,
+        };
+        assert!(window(Some("2025-12-31T21:00:00Z")).has_reset(now));
+        assert!(window(Some("2026-01-01T00:00:00Z")).has_reset(now));
+        assert!(!window(Some("2026-01-01T00:00:01Z")).has_reset(now));
+        assert!(!window(None).has_reset(now));
+        assert!(!window(Some("not a time")).has_reset(now));
+    }
+
+    #[test]
+    fn the_timeout_covers_a_descendant_that_keeps_stdout_open() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "sleep 5 & echo partial"]);
+        let start = Instant::now();
+        let result = run_with_timeout(command, Duration::from_secs(1));
+        assert!(start.elapsed() < Duration::from_secs(10));
+        assert_eq!(result, Err("timed out after 1s".to_string()));
+    }
+
+    #[test]
+    fn run_with_timeout_returns_the_output() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "echo hello"]);
+        let result = run_with_timeout(command, Duration::from_secs(10));
+        assert_eq!(result, Ok((true, "hello\n".to_string())));
     }
 }
