@@ -9,7 +9,7 @@ use std::io::Write as _;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
@@ -18,6 +18,9 @@ const CCX: &str = env!("CARGO_BIN_EXE_ccx");
 /// Synthetic keys only.
 const KEY: &str = "sk-ant-test-paid-0000";
 const SHELL_KEY: &str = "sk-ant-test-shell-1111";
+
+/// A session id for the resume tests.
+const ID: &str = "11111111-1111-4111-8111-111111111111";
 
 const LATER: &str = "2099-01-01T00:00:00Z";
 const MUCH_LATER: &str = "2099-06-01T00:00:00Z";
@@ -132,6 +135,39 @@ impl Fixture {
     fn all_limited(&self) {
         self.cache("main", 95.0, 10.0);
         self.cache("angel2", 10.0, 97.0);
+    }
+
+    /// Writes session `ID` for the cwd (HOME) into the account dir `dir`,
+    /// with a change time one minute ago. Returns the path.
+    fn session(&self, dir: &str) -> PathBuf {
+        let home = self.home();
+        let enc: String = home
+            .to_str()
+            .unwrap()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        let path = home.join(format!("{dir}/projects/{enc}/{ID}.jsonl"));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let text = format!(
+            "{{\"type\":\"user\",\"sessionId\":\"{ID}\",\"cwd\":\"{}\",\"message\":{{\"content\":\"hi\"}}}}\n",
+            home.display()
+        );
+        fs::write(&path, text).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(60))
+            .unwrap();
+        path
+    }
+
+    /// The copy of the session at `source` in the account dir `dir`.
+    fn copy_in(&self, source: &Path, dir: &str) -> PathBuf {
+        let from = source.strip_prefix(self.home()).unwrap();
+        let rest: PathBuf = from.components().skip(1).collect();
+        self.home().join(dir).join(rest)
     }
 
     /// The text of each file under HOME, except the key file and the fake
@@ -311,6 +347,110 @@ fn on_a_terminal_ccx_asks_before_the_paid_fallback() {
     assert!(text.contains("Use paid account paid?"), "{text}");
     assert!(text.contains("\"CCX_ACTIVE\":\"main\""), "{text}");
     assert!(!text.contains("ANTHROPIC_API_KEY"), "{text}");
+}
+
+// Resume of a session (`-c`, `--resume <id>`) with the paid rules.
+
+#[test]
+fn resume_of_a_paid_session_goes_to_a_usable_subscription_account() {
+    let fx = Fixture::new();
+    let source = fx.session(".claude-paid");
+    fx.cache("main", 10.0, 10.0);
+    fx.cache("angel2", 50.0, 10.0);
+    for args in [&["-c"][..], &["--resume", ID]] {
+        let json = launched(&mut fx.ccx(args));
+        assert_eq!(account_of(&json), "main", "{args:?}");
+        assert_eq!(json["argv"], json!(["--resume", ID]), "{args:?}");
+        assert!(json["env"].get("ANTHROPIC_API_KEY").is_none(), "{json}");
+    }
+    let copy = fx.copy_in(&source, ".claude");
+    assert_eq!(fs::read(copy).unwrap(), fs::read(&source).unwrap());
+
+    // On a terminal, ccx tells the reason and does not ask.
+    let fx = Fixture::new();
+    fx.session(".claude-paid");
+    fx.cache("main", 10.0, 10.0);
+    fx.cache("angel2", 50.0, 10.0);
+    let text = on_tty(&fx.ccx(&[]), &["-c"], "");
+    assert!(
+        text.contains("ccx: handoff paid → main (paid is a paid API-key account)"),
+        "{text}"
+    );
+    assert!(!text.contains("Use paid account"), "{text}");
+    assert!(text.contains("\"CCX_ACTIVE\":\"main\""), "{text}");
+}
+
+#[test]
+fn resume_of_a_paid_session_with_all_subscription_accounts_limited() {
+    // No TTY and no flag: the soonest-reset subscription account.
+    let fx = Fixture::new();
+    fx.session(".claude-paid");
+    fx.all_limited();
+    let json = launched(&mut fx.ccx(&["-c"]));
+    assert_eq!(account_of(&json), "main");
+    assert_eq!(json["argv"], json!(["--resume", ID]));
+    assert!(json["env"].get("ANTHROPIC_API_KEY").is_none(), "{json}");
+
+    // --allow-paid: the session stays in the paid account, with its key.
+    let fx = Fixture::new();
+    fx.session(".claude-paid");
+    fx.all_limited();
+    let json = launched(&mut fx.ccx(&["--allow-paid", "-c"]));
+    assert_eq!(account_of(&json), "paid");
+    assert_eq!(json["argv"], json!(["-c"]));
+    assert_eq!(json["env"]["ANTHROPIC_API_KEY"], KEY);
+    assert!(!fx.home().join(".claude/projects").exists());
+
+    // On a terminal, ccx asks. Yes keeps the paid account; no goes to the
+    // soonest-reset account.
+    let text = on_tty(&fx.ccx(&[]), &["-c"], "y");
+    assert!(
+        text.contains("All subscription accounts are limited. Use paid account paid?"),
+        "{text}"
+    );
+    assert!(text.contains("\"CCX_ACTIVE\":\"paid\""), "{text}");
+    let text = on_tty(&fx.ccx(&[]), &["-c"], "n");
+    assert!(text.contains("Use paid account paid?"), "{text}");
+    assert!(text.contains("\"CCX_ACTIVE\":\"main\""), "{text}");
+    assert!(!text.contains(KEY), "{text}");
+}
+
+#[test]
+fn resume_with_all_subscription_accounts_limited_offers_the_paid_account() {
+    // No TTY and no flag: the session stays in the owner, with no key.
+    let fx = Fixture::new();
+    let source = fx.session(".claude-angel2");
+    fx.all_limited();
+    let json = launched(&mut fx.ccx(&["-c"]));
+    assert_eq!(account_of(&json), "angel2");
+    assert_eq!(json["argv"], json!(["-c"]));
+    assert!(json["env"].get("ANTHROPIC_API_KEY").is_none(), "{json}");
+
+    // --allow-paid: a handoff to the paid account, with its key.
+    let json = launched(&mut fx.ccx(&["--allow-paid", "--resume", ID]));
+    assert_eq!(account_of(&json), "paid");
+    assert_eq!(json["argv"], json!(["--resume", ID]));
+    assert_eq!(json["env"]["ANTHROPIC_API_KEY"], KEY);
+    let copy = fx.copy_in(&source, ".claude-paid");
+    assert_eq!(fs::read(copy).unwrap(), fs::read(&source).unwrap());
+
+    // On a terminal, ccx asks. No keeps the session in the owner.
+    let fx = Fixture::new();
+    fx.session(".claude-angel2");
+    fx.all_limited();
+    let text = on_tty(&fx.ccx(&[]), &["-c"], "n");
+    assert!(
+        text.contains("All subscription accounts are limited. Use paid account paid?"),
+        "{text}"
+    );
+    assert!(text.contains("\"CCX_ACTIVE\":\"angel2\""), "{text}");
+    assert!(!text.contains(KEY), "{text}");
+    let text = on_tty(&fx.ccx(&[]), &["-c"], "y");
+    assert!(
+        text.contains("ccx: handoff angel2 → paid (all subscription accounts limited)"),
+        "{text}"
+    );
+    assert!(text.contains("\"CCX_ACTIVE\":\"paid\""), "{text}");
 }
 
 // Key sources.
