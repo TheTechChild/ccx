@@ -4,7 +4,7 @@ ccx is a command-line tool. It starts Claude Code on the account that has the mo
 
 ccx is for a person who has more than one Claude Code account, for example a personal Max account and a work account. Each account has its own configuration directory. ccx reads the usage of each account and starts `claude` on the account that has the most capacity available. You can also name the account.
 
-> **Status:** Version 0.1.0. `ccx @name`, automatic selection, `ccx status`, `ccx usage refresh`, `ccx manage adopt`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync`, `ccx manage doctor`, `ccx manage service` and `ccx handoff` are available. Refer to [PLAN.md](PLAN.md) for the plan.
+> **Status:** Version 0.1.0. `ccx @name`, automatic selection, `ccx status`, `ccx usage refresh`, `ccx manage adopt`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync`, `ccx manage doctor`, `ccx manage service`, `ccx handoff` and the automatic handoff on `ccx -c` and `ccx --resume <id>` are available. Refer to [PLAN.md](PLAN.md) for the plan.
 
 ## Credential policy
 
@@ -104,6 +104,26 @@ When the target has a copy of the session already:
 When `oauthAccount.organizationUuid` in `.claude.json` is different in the two accounts, handoff shows a warning before the copy: Claude cannot use the earlier thinking in the target account, and the next responses can be slower and use more tokens.
 
 After the copy, ccx runs `claude --resume <id>` in the target account from the directory of the session. It uses the same environment rules as `ccx @name`.
+
+### Automatic handoff on `ccx -c` and `ccx --resume <id>`
+
+`ccx -c`, `ccx --continue` and `ccx --resume <id>` (also `-r <id>` and `--resume=<id>`) find the account that owns the session from the files on disk. ccx also finds sessions that you started with plain `claude` or with an alias such as `claude2`.
+
+- For `--resume <id>`, the owner is the account that has `projects/*/<id>.jsonl`. When more than one account has the session, the newest copy wins.
+- For `-c`, the owner is the account with the newest `*.jsonl` in `projects/<encoded cwd>/`. When no account has a session for the current directory, ccx uses automatic selection.
+
+Then:
+
+1. If the owner is not limited, ccx launches the owner. It copies no files.
+2. If the owner is limited (the same rules as automatic selection), ccx picks a target account with automatic selection. It copies the session with the handoff rules above and runs `claude --resume <id>` in the target. ccx changes `-c` to `--resume <id>`. If the handoff writes a fork, ccx resumes the fork.
+3. If all accounts are limited, ccx launches the owner and shows a warning.
+4. If the handoff refuses, for example because the session is open, ccx launches the owner and shows a warning.
+
+On a terminal, ccx shows a banner that names the owner, the target and the reason, for example `ccx: handoff main → angel2 (main limited: 5h 92%)`. For a fork, the banner also shows the new session id. ccx shows the banner and the warnings only when stdout and stderr are terminals, and not for `-p`.
+
+A bare `ccx --resume` (with no id, or with a search term) opens the session picker of Claude Code. ccx cannot know which session you will select. Thus ccx does no handoff. It picks the account with automatic selection and passes `--resume` with no change.
+
+`ccx @name -c` and `CCX_ACCOUNT=name ccx -c` use only that account. They never do a handoff.
 
 ## Manage accounts
 

@@ -137,6 +137,28 @@ pub fn limited(
     usage.is_some_and(|u| limiting(u, pick, model, now_ms).next().is_some())
 }
 
+/// The windows that limit the account, for example `5h 92%, wk 96%` or
+/// `Opus wk 99%`.
+pub fn limit_text(
+    usage: &Snapshot,
+    pick: &config::Pick,
+    model: Option<&str>,
+    now_ms: u64,
+) -> String {
+    limiting(usage, pick, model, now_ms)
+        .map(|l| {
+            let name = match (l.kind, &l.scope) {
+                (Kind::Session, _) => "5h".to_string(),
+                (Kind::WeeklyAll, _) => "wk".to_string(),
+                (Kind::WeeklyScoped, Some(scope)) => format!("{scope} wk"),
+                (Kind::WeeklyScoped, None) => "wk".to_string(),
+            };
+            format!("{name} {:.0}%", current(l, now_ms))
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// The time when all limiting windows have reset, or `None` when one of
 /// them has no reset time.
 fn frees_at(
@@ -232,7 +254,7 @@ pub fn pick<'a>(
 }
 
 /// The data that ccx reads for one account from its files.
-fn candidate(account: &Account, home: &OsStr) -> Candidate {
+pub fn candidate(account: &Account, home: &OsStr) -> Candidate {
     let claude_json: Option<Value> = fs::read(usage::claude_json_path(account, home))
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok());
@@ -860,6 +882,30 @@ mod tests {
         assert_eq!(
             all_limited_warning("angel2", None, NOW, utc),
             "ccx: warning: all accounts limited; angel2 reset time is unknown"
+        );
+    }
+
+    #[test]
+    fn limit_text_names_the_limiting_windows() {
+        let c = known(
+            "a",
+            5.0,
+            vec![
+                window(Kind::Session, 92.4, Some(2)),
+                window(Kind::WeeklyAll, 96.0, Some(72)),
+                scoped("Opus", 99.0),
+            ],
+        );
+        let usage = c.usage.as_ref().unwrap();
+        assert_eq!(
+            limit_text(usage, &cfg(), Some("opus"), NOW),
+            "5h 92%, wk 96%, Opus wk 99%"
+        );
+        assert_eq!(limit_text(usage, &cfg(), None, NOW), "5h 92%, wk 96%");
+        let ok = used("b", 5.0, 10.0, 10.0);
+        assert_eq!(
+            limit_text(ok.usage.as_ref().unwrap(), &cfg(), None, NOW),
+            ""
         );
     }
 
