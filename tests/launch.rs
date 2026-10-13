@@ -389,6 +389,11 @@ fn missing_config_is_a_clear_error() {
         "{}",
         stderr(&out)
     );
+    assert!(
+        stderr(&out).contains("run `ccx manage adopt`"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 #[test]
