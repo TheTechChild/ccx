@@ -320,8 +320,8 @@ unsafe extern "C" {
     fn tzset();
 }
 
-/// The local time of `ms` (milliseconds since the Unix epoch).
-pub fn local_clock(ms: i64) -> Option<Clock> {
+/// The local calendar time of `ms` (milliseconds since the Unix epoch).
+pub fn local_tm(ms: i64) -> Option<libc::tm> {
     let secs = libc::time_t::try_from(ms.div_euclid(1000)).ok()?;
     // SAFETY: `tm` is plain data, so zeroed memory is a valid value.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
@@ -330,9 +330,12 @@ pub fn local_clock(ms: i64) -> Option<Clock> {
         tzset();
         libc::localtime_r(&secs, &mut tm)
     };
-    if result.is_null() {
-        return None;
-    }
+    (!result.is_null()).then_some(tm)
+}
+
+/// The local time of `ms` (milliseconds since the Unix epoch).
+pub fn local_clock(ms: i64) -> Option<Clock> {
+    let tm = local_tm(ms)?;
     Some(Clock {
         weekday: u8::try_from(tm.tm_wday).ok()?,
         hour: u8::try_from(tm.tm_hour).ok()?,

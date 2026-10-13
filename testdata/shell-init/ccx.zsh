@@ -158,9 +158,12 @@ esac
 ;;
 (handoff)
 _arguments "${_arguments_options[@]}" : \
-'-h[Print help]' \
-'--help[Print help]' \
-'*::args:_default' \
+'--all[List the threads from all directories]' \
+'--no-resume[Copy only. Do not start claude. Print the session id in the target account]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::id -- The session id, or a unique part of 8 or more characters at its start:_default' \
+'::target -- The target account, for example `@angel2`:_default' \
 && ret=0
 ;;
 (@angel2)
@@ -186,7 +189,7 @@ _ccx_commands() {
 'manage:Manage accounts' \
 'status:Show the kind, tier and usage of each account' \
 'usage:Fetch usage and write the usage cache' \
-'handoff:Move a session to a different account (not ready yet)' \
+'handoff:Copy a session to a different account and resume it there' \
 '@angel2:Start claude as account angel2' \
 '@lab:Start claude as account lab' \
 '@main:Start claude as account main' \

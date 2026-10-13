@@ -2,6 +2,7 @@ mod adopt;
 mod config;
 mod doctor;
 mod env;
+mod handoff;
 mod launch;
 mod list;
 mod paths;
@@ -62,8 +63,28 @@ enum Own {
         #[command(subcommand)]
         command: UsageCommand,
     },
-    /// Move a session to a different account (not ready yet).
-    Handoff(Rest),
+    /// Copy a session to a different account and resume it there.
+    ///
+    /// With no session id, handoff lists the threads for the current
+    /// directory from all accounts. On a terminal, you then select a thread
+    /// and a target account. `ccx handoff <id> @name` does the handoff with
+    /// no prompts. Handoff copies the files. It never moves or changes the
+    /// source files. When the target has a different copy, handoff writes a
+    /// fork with a new session id.
+    Handoff {
+        /// The session id, or a unique part of 8 or more characters at its
+        /// start.
+        id: Option<String>,
+        /// The target account, for example `@angel2`.
+        target: Option<String>,
+        /// List the threads from all directories.
+        #[arg(long)]
+        all: bool,
+        /// Copy only. Do not start claude. Print the session id in the
+        /// target account.
+        #[arg(long)]
+        no_resume: bool,
+    },
 }
 
 /// `ccx manage` commands.
@@ -160,12 +181,6 @@ enum UsageCommand {
     },
 }
 
-#[derive(Debug, clap::Args)]
-struct Rest {
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
-    args: Vec<String>,
-}
-
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match run(args) {
@@ -190,7 +205,7 @@ fn run(args: Vec<OsString>) -> config::Result<ExitCode> {
 
 fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
     let cli = Cli::parse_from(std::iter::once(OsString::from("ccx")).chain(args));
-    let word = match cli.command {
+    match cli.command {
         Own::Manage { command } => {
             let env = Env::from_process();
             match command {
@@ -216,11 +231,9 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
                     }
                 },
             }
-            return Ok(ExitCode::SUCCESS);
+            Ok(ExitCode::SUCCESS)
         }
-        Own::Status { json } => {
-            return Ok(ExitCode::from(status::run(&Env::from_process(), json)?));
-        }
+        Own::Status { json } => Ok(ExitCode::from(status::run(&Env::from_process(), json)?)),
         Own::Usage {
             command:
                 UsageCommand::Refresh {
@@ -230,15 +243,27 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
                 },
         } => {
             let ok = status::refresh(&Env::from_process(), name.as_deref(), background)?;
-            return Ok(if ok {
+            Ok(if ok {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::FAILURE
-            });
+            })
         }
-        Own::Handoff(_) => "handoff",
-    };
-    Err(format!("`ccx {word}` is not ready yet"))
+        Own::Handoff {
+            id,
+            target,
+            all,
+            no_resume,
+        } => handoff::run(
+            &Env::from_process(),
+            handoff::Args {
+                id,
+                target,
+                all,
+                no_resume,
+            },
+        ),
+    }
 }
 
 fn run_launch(
