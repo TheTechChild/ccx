@@ -5,6 +5,7 @@ mod doctor;
 mod env;
 mod handoff;
 mod launch;
+mod lifecycle;
 mod list;
 mod paths;
 mod pick;
@@ -124,6 +125,72 @@ enum Manage {
         /// base account after the login.
         #[arg(long)]
         no_prefs: bool,
+        /// Confirm the plan without a prompt.
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// Log in to an account with `claude auth login`.
+    ///
+    /// Login gives the email from `config.local.toml` to `claude auth login
+    /// --email`. Then it compares the email of the login with that email
+    /// and fails when they are different. With no email in
+    /// `config.local.toml`, login shows a warning and does not compare.
+    Login {
+        /// The account to log in to.
+        #[arg(required_unless_present = "all")]
+        name: Option<String>,
+        /// Log in to each account that `claude auth status` shows as not
+        /// logged in. Then show a summary for each account.
+        #[arg(long, conflicts_with = "name")]
+        all: bool,
+    },
+    /// Log out of an account with `claude auth logout`.
+    Logout {
+        /// The account to log out of.
+        name: String,
+        /// Log out without a prompt.
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// Change the entry of an account and validate the config.
+    ///
+    /// Edit changes only the given fields and keeps the comments and the
+    /// order. `--email` goes only into `config.local.toml`. The other
+    /// fields go into `config.toml`.
+    Edit {
+        /// The account to change.
+        name: String,
+        /// The expected email of the login.
+        #[arg(long)]
+        email: Option<String>,
+        /// The weight for automatic selection. It must be more than 0.
+        #[arg(long)]
+        weight: Option<f64>,
+        /// Use the account for automatic selection.
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        /// Do not use the account for automatic selection.
+        #[arg(long)]
+        disable: bool,
+    },
+    /// Open `config.toml` in `$EDITOR` and validate it after the editor
+    /// exits. When the new text is not valid, the old file stays.
+    EditConfig,
+    /// Remove an account from the config. Keep its dir.
+    ///
+    /// Rm shows a plan and asks before it changes files. It prints the
+    /// keychain item name of the account, so that you can remove the item
+    /// yourself. With `--purge`, rm also runs `claude auth logout`,
+    /// deletes the credentials file of the account and moves the dir into
+    /// `~/.local/state/ccx/trash/`. Rm never deletes the dir. Rm refuses
+    /// the base account.
+    Rm {
+        /// The account to remove.
+        name: String,
+        /// Also log out, delete the credentials file and move the dir into
+        /// the trash.
+        #[arg(long)]
+        purge: bool,
         /// Confirm the plan without a prompt.
         #[arg(short, long)]
         yes: bool,
@@ -268,6 +335,29 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
                         yes,
                     },
                 )?,
+                Manage::Login { name, all: _ } => {
+                    if !lifecycle::login(&env, name.as_deref())? {
+                        return Ok(ExitCode::FAILURE);
+                    }
+                }
+                Manage::Logout { name, yes } => lifecycle::logout(&env, &name, yes)?,
+                Manage::Edit {
+                    name,
+                    email,
+                    weight,
+                    enable,
+                    disable,
+                } => lifecycle::edit(
+                    &env,
+                    &name,
+                    &lifecycle::Edit {
+                        email,
+                        weight,
+                        enabled: (enable || disable).then_some(enable),
+                    },
+                )?,
+                Manage::EditConfig => lifecycle::edit_config(&env)?,
+                Manage::Rm { name, purge, yes } => lifecycle::rm(&env, &name, purge, yes)?,
                 Manage::List { json } => list::run(&env, json)?,
                 Manage::ShellInit { shell } => shell_init::run(&env, shell, Cli::command())?,
                 Manage::Sync {

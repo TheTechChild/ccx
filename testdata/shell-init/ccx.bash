@@ -47,8 +47,23 @@ _ccx() {
             ccx__subcmd__manage,doctor)
                 cmd="ccx__subcmd__manage__subcmd__doctor"
                 ;;
+            ccx__subcmd__manage,edit)
+                cmd="ccx__subcmd__manage__subcmd__edit"
+                ;;
+            ccx__subcmd__manage,edit-config)
+                cmd="ccx__subcmd__manage__subcmd__edit__subcmd__config"
+                ;;
             ccx__subcmd__manage,list)
                 cmd="ccx__subcmd__manage__subcmd__list"
+                ;;
+            ccx__subcmd__manage,login)
+                cmd="ccx__subcmd__manage__subcmd__login"
+                ;;
+            ccx__subcmd__manage,logout)
+                cmd="ccx__subcmd__manage__subcmd__logout"
+                ;;
+            ccx__subcmd__manage,rm)
+                cmd="ccx__subcmd__manage__subcmd__rm"
                 ;;
             ccx__subcmd__manage,service)
                 cmd="ccx__subcmd__manage__subcmd__service"
@@ -148,7 +163,7 @@ _ccx() {
             return 0
             ;;
         ccx__subcmd__manage)
-            opts="-h --help adopt add list shell-init sync doctor service"
+            opts="-h --help adopt add login logout edit edit-config rm list shell-init sync doctor service"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -211,8 +226,86 @@ _ccx() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        ccx__subcmd__manage__subcmd__edit)
+            opts="-h --email --weight --enable --disable --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --email)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --weight)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        ccx__subcmd__manage__subcmd__edit__subcmd__config)
+            opts="-h --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         ccx__subcmd__manage__subcmd__list)
             opts="-h --json --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        ccx__subcmd__manage__subcmd__login)
+            opts="-h --all --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        ccx__subcmd__manage__subcmd__logout)
+            opts="-y -h --yes --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        ccx__subcmd__manage__subcmd__rm)
+            opts="-y -h --purge --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

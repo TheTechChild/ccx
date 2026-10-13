@@ -64,6 +64,50 @@ _arguments "${_arguments_options[@]}" : \
 ':name -- The account name. It must match `^\[a-z0-9\]\[a-z0-9_-\]*$`:_default' \
 && ret=0
 ;;
+(login)
+_arguments "${_arguments_options[@]}" : \
+'()--all[Log in to each account that \`claude auth status\` shows as not logged in. Then show a summary for each account]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::name -- The account to log in to:_default' \
+&& ret=0
+;;
+(logout)
+_arguments "${_arguments_options[@]}" : \
+'-y[Log out without a prompt]' \
+'--yes[Log out without a prompt]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name -- The account to log out of:_default' \
+&& ret=0
+;;
+(edit)
+_arguments "${_arguments_options[@]}" : \
+'--email=[The expected email of the login]:EMAIL:_default' \
+'--weight=[The weight for automatic selection. It must be more than 0]:WEIGHT:_default' \
+'(--disable)--enable[Use the account for automatic selection]' \
+'--disable[Do not use the account for automatic selection]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':name -- The account to change:_default' \
+&& ret=0
+;;
+(edit-config)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(rm)
+_arguments "${_arguments_options[@]}" : \
+'--purge[Also log out, delete the credentials file and move the dir into the trash]' \
+'-y[Confirm the plan without a prompt]' \
+'--yes[Confirm the plan without a prompt]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':name -- The account to remove:_default' \
+&& ret=0
+;;
 (list)
 _arguments "${_arguments_options[@]}" : \
 '--json[Print stable JSON]' \
@@ -235,6 +279,11 @@ _ccx__subcmd__manage_commands() {
     local commands; commands=(
 'adopt:Find the accounts on this machine and write them into the config' \
 'add:Make a new account\: the dir, the sync links, the login and the config entry' \
+'login:Log in to an account with \`claude auth login\`' \
+'logout:Log out of an account with \`claude auth logout\`' \
+'edit:Change the entry of an account and validate the config' \
+'edit-config:Open \`config.toml\` in \`\$EDITOR\` and validate it after the editor exits. When the new text is not valid, the old file stays' \
+'rm:Remove an account from the config. Keep its dir' \
 'list:Show each configured account' \
 'shell-init:Print shell code for the profile\: completions and account aliases' \
 'sync:Link the shared setup of the base account into other accounts' \
@@ -258,10 +307,35 @@ _ccx__subcmd__manage__subcmd__doctor_commands() {
     local commands; commands=()
     _describe -t commands 'ccx manage doctor commands' commands "$@"
 }
+(( $+functions[_ccx__subcmd__manage__subcmd__edit_commands] )) ||
+_ccx__subcmd__manage__subcmd__edit_commands() {
+    local commands; commands=()
+    _describe -t commands 'ccx manage edit commands' commands "$@"
+}
+(( $+functions[_ccx__subcmd__manage__subcmd__edit-config_commands] )) ||
+_ccx__subcmd__manage__subcmd__edit-config_commands() {
+    local commands; commands=()
+    _describe -t commands 'ccx manage edit-config commands' commands "$@"
+}
 (( $+functions[_ccx__subcmd__manage__subcmd__list_commands] )) ||
 _ccx__subcmd__manage__subcmd__list_commands() {
     local commands; commands=()
     _describe -t commands 'ccx manage list commands' commands "$@"
+}
+(( $+functions[_ccx__subcmd__manage__subcmd__login_commands] )) ||
+_ccx__subcmd__manage__subcmd__login_commands() {
+    local commands; commands=()
+    _describe -t commands 'ccx manage login commands' commands "$@"
+}
+(( $+functions[_ccx__subcmd__manage__subcmd__logout_commands] )) ||
+_ccx__subcmd__manage__subcmd__logout_commands() {
+    local commands; commands=()
+    _describe -t commands 'ccx manage logout commands' commands "$@"
+}
+(( $+functions[_ccx__subcmd__manage__subcmd__rm_commands] )) ||
+_ccx__subcmd__manage__subcmd__rm_commands() {
+    local commands; commands=()
+    _describe -t commands 'ccx manage rm commands' commands "$@"
 }
 (( $+functions[_ccx__subcmd__manage__subcmd__service_commands] )) ||
 _ccx__subcmd__manage__subcmd__service_commands() {

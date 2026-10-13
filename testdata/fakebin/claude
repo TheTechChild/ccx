@@ -13,6 +13,9 @@
 #   `oauthAccount.organizationRateLimitTier` FAKE_LOGIN_TIER (default
 #   "default_claude_max_5x") and `organizationType` FAKE_LOGIN_ORG_TYPE
 #   (default "claude_max"). FAKE_LOGIN_FAIL makes it fail with exit 1.
+# - `claude auth logout` removes "<dir>/.fake-login" and writes the file
+#   "<dir>/.fake-logout", where dir is CLAUDE_CONFIG_DIR, else HOME.
+#   FAKE_LOGOUT_FAIL makes it fail with exit 1.
 # - When FAKE_CLAUDE_VERSION is set, `claude --version` prints its value.
 #   When FAKE_LOGGED_OUT is set, all accounts are logged out.
 # - `claude -p /usage ...` prints synthetic stream-json events. The
@@ -72,6 +75,19 @@ if (@ARGV >= 2 && $ARGV[0] eq 'auth' && $ARGV[1] eq 'login') {
     } }), "\n";
     close($fh);
     print "Login successful.\n";
+    exit 0;
+}
+
+if ("@ARGV" eq "auth logout") {
+    if ($ENV{FAKE_LOGOUT_FAIL}) {
+        print STDERR "fake claude: logout failed\n";
+        exit 1;
+    }
+    my $dir = $ENV{CLAUDE_CONFIG_DIR} // $ENV{HOME};
+    unlink "$dir/.fake-login";
+    open(my $fh, '>', "$dir/.fake-logout") or die "cannot write $dir/.fake-logout: $!";
+    close($fh);
+    print "Successfully logged out.\n";
     exit 0;
 }
 

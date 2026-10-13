@@ -4,7 +4,7 @@ ccx is a command-line tool. It starts Claude Code on the account that has the mo
 
 ccx is for a person who has more than one Claude Code account, for example a personal Max account and a work account. Each account has its own configuration directory. ccx reads the usage of each account and starts `claude` on the account that has the most capacity available. You can also name the account.
 
-> **Status:** Version 0.1.0. `ccx @name`, automatic selection, `ccx status`, `ccx usage refresh`, `ccx manage adopt`, `ccx manage add`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync` (also `--prefs`), `ccx manage doctor`, `ccx manage service`, `ccx handoff` and the automatic handoff on `ccx -c` and `ccx --resume <id>` are available. Refer to [PLAN.md](PLAN.md) for the plan.
+> **Status:** Version 0.1.0. `ccx @name`, automatic selection, `ccx status`, `ccx usage refresh`, `ccx manage adopt`, `ccx manage add`, `ccx manage login`, `ccx manage logout`, `ccx manage edit`, `ccx manage edit-config`, `ccx manage rm`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync` (also `--prefs`), `ccx manage doctor`, `ccx manage service`, `ccx handoff` and the automatic handoff on `ccx -c` and `ccx --resume <id>` are available. Refer to [PLAN.md](PLAN.md) for the plan.
 
 ## Credential policy
 
@@ -175,6 +175,55 @@ After you confirm, add does these steps:
 Add keeps the other entries and the comments in the two files. It writes each file to a temporary file and then renames it. Add never reads or keeps the Claude Code credentials. Only `claude auth login` touches them.
 
 If the login fails, the config does not change. Run `ccx manage add` again. Add accepts a directory that exists when it contains only Claude Code files. To add a directory that has a login already, use `ccx manage adopt`.
+
+### Log in and log out
+
+```sh
+ccx manage login work      # Log in to one account.
+ccx manage login --all     # Log in to each account that is not logged in.
+ccx manage logout work     # Ask, then log out of one account.
+ccx manage logout work -y  # Do not ask. Use this in scripts.
+```
+
+`ccx manage login NAME` runs `claude auth login --email <email>` with `CLAUDE_CONFIG_DIR` set to the directory of the account. For the base account, `CLAUDE_CONFIG_DIR` is not set. The email comes only from `config.local.toml`. After the login, ccx runs `claude auth status --json` and compares the two emails. If the emails are different, the command fails and tells you how to log out. If `config.local.toml` has no email for the account, ccx shows a warning, runs `claude auth login` with no email and does not compare.
+
+`ccx manage login --all` runs `claude auth status` for each account. It logs in only to the accounts that are not logged in. Then it shows one summary line for each account. The exit code is 1 when a login failed.
+
+`ccx manage logout NAME` runs `claude auth logout` for that account only.
+
+ccx never reads, keeps or refreshes the Claude Code credentials. Only `claude auth login` and `claude auth logout` touch them.
+
+### Change an account
+
+```sh
+ccx manage edit work --weight 5              # Change the weight for automatic selection.
+ccx manage edit work --disable               # Do not use the account for automatic selection.
+ccx manage edit work --enable
+ccx manage edit work --email user@example.com # Change the expected email.
+ccx manage edit-config                       # Open config.toml in $EDITOR.
+```
+
+`ccx manage edit NAME` changes only the fields that you give. It keeps the other entries, the order and the comments. It validates the two files before it writes them. It refuses a value that is not valid, for example a weight of 0 or less. `--email` writes the email only to `config.local.toml` (mode 0600). `config.toml` never gets an email.
+
+`ccx manage edit-config` opens a copy of `config.toml` in `$EDITOR` (else `$VISUAL`, else `vi`). After the editor exits, ccx validates the copy. If the copy is valid, ccx writes it to `config.toml`. If not, `config.toml` does not change, and ccx tells you where the copy is.
+
+### Remove an account
+
+```sh
+ccx manage rm work                # Remove the account from the config. Keep the directory.
+ccx manage rm work --purge        # Also log out and move the directory to the trash.
+ccx manage rm work --purge -y     # Do not ask. Use this in scripts.
+```
+
+`ccx manage rm NAME` shows the plan and asks before it changes files. When there is no terminal and you do not give `-y`, rm stops and changes nothing. Rm removes the account from `config.toml` and from `config.local.toml`. It keeps the directory. It shows the name of the macOS keychain item of the account, for example `Claude Code-credentials-1a2b3c4d`. ccx does not remove the keychain item. To remove it, run the `security delete-generic-password` command that rm shows.
+
+With `--purge`, rm also does these steps:
+
+1. It runs `claude auth logout` for the account. If the logout fails, rm shows a warning and continues.
+2. It deletes the credentials file in the directory if the file is there. It never reads the file.
+3. It moves the directory to `~/.local/state/ccx/trash/NAME-<time>`. The trash directory has mode 0700. ccx never deletes the directory. To delete it, remove it from the trash yourself.
+
+Rm refuses the base account `~/.claude`.
 
 ### List the accounts
 
