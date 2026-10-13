@@ -734,7 +734,9 @@ fn chosen_state(name: &str, now: u64) -> pick::State {
 
 /// `-c` or `--resume <id>` for a session that `thread.account` owns:
 /// launch the owner, or hand off to the account that automatic selection
-/// picks when the owner is limited (#15).
+/// picks when the owner is limited or is a paid API-key account (#15,
+/// #20). When all subscription accounts are limited, ccx asks before it
+/// uses a paid account, the same as for `ccx` with no arguments.
 fn auto_resume<'a>(
     cx: &AutoContext<'a>,
     home: &std::ffi::OsStr,
@@ -755,7 +757,7 @@ fn auto_resume<'a>(
         .unwrap_or_else(|| pick::candidate(owner, home));
     let now = usage::now_ms();
     let model = pick::model_arg(args);
-    let mut auto = Auto {
+    let auto = Auto {
         banner: Some(pick::banner(&owner_candidate, now, pick::local_clock)),
         ..Auto::default()
     };
@@ -767,45 +769,134 @@ fn auto_resume<'a>(
         &config.pick,
         now,
     );
-    let (index, reason) = match route {
+    let hop = Hop {
+        cx,
+        home,
+        owner,
+        thread,
+        intent,
+        now,
+    };
+    let decision = match route {
         resume::Route::Owner => return Ok((owner, auto)),
-        resume::Route::AllLimited => {
-            auto.notes.push(resume::all_limited_warning(&owner.name));
-            return Ok((owner, auto));
+        resume::Route::Handoff { index, reason } => {
+            return Ok(hop.run(&candidates[index], &reason, auto, args));
         }
-        resume::Route::Handoff { index, reason } => (index, reason),
+        resume::Route::AllLimited { decision } => decision,
     };
-    let chosen = &candidates[index];
-    let target = config
-        .account(&chosen.name)
-        .expect("each candidate is a configured account");
-    // A dry run copies nothing. It shows the launch for a new copy.
-    let done = if cx.dry_run {
-        Ok((thread.id.clone(), false))
+
+    // All subscription accounts are limited: offer a paid account. A paid
+    // owner is the offer, so that the session does not move.
+    let offer = if owner_candidate.paid {
+        Some(&owner_candidate)
     } else {
-        let mut warnings = Vec::new();
-        let done = handoff::handoff(home, owner, target, thread, SystemTime::now(), &mut |w| {
-            warnings.push(format!("ccx: warning: {w}"))
-        });
-        auto.notes.extend(warnings);
-        done.map(|d| (d.id, d.plan == handoff::Plan::Fork))
+        pick::paid_offer(candidates, decision.as_ref()).map(|i| &candidates[i])
     };
-    match done {
-        Ok((id, fork)) => {
-            let fork = fork.then_some(id.as_str());
-            auto.notes
-                .push(resume::banner(&owner.name, &target.name, &reason, fork));
-            auto.banner = Some(pick::banner(chosen, now, pick::local_clock));
-            auto.state = Some((pick::state_path(home), chosen_state(&chosen.name, now)));
-            *args = resume::target_args(args, intent, &id);
-            Ok((target, auto))
+    if let Some(paid) = offer.filter(|_| decision.is_some()) {
+        let ask = || paid::ask(&paid::fallback_question(&paid.name));
+        if paid::consent(cx.allow_paid, paid::terminal(), ask)? {
+            if paid.name == owner.name {
+                let auto = Auto {
+                    banner: Some(paid::banner(&owner.name)),
+                    paid_consent: true,
+                    ..Auto::default()
+                };
+                return Ok((owner, auto));
+            }
+            return Ok(hop.run(paid, "all subscription accounts limited", auto, args));
         }
-        Err(e) => {
-            auto.notes.push(format!(
-                "ccx: warning: cannot hand off to {}: {e}; the session stays in {}",
-                target.name, owner.name
-            ));
+    }
+    match decision {
+        // A paid owner with no yes: the soonest-reset subscription account.
+        Some(decision) if owner_candidate.paid => {
+            let chosen = &candidates[decision.index];
+            let mut auto = auto;
+            if let pick::Reason::AllLimited { frees_at_ms } = decision.reason {
+                auto.notes.push(pick::all_limited_warning(
+                    &chosen.name,
+                    frees_at_ms,
+                    now,
+                    pick::local_clock,
+                ));
+            }
+            Ok(hop.run(chosen, &resume::paid_reason(&owner.name), auto, args))
+        }
+        // A paid owner and no subscription account: `run_launch` asks
+        // with the question for a named paid account.
+        None if owner_candidate.paid => Ok((owner, auto)),
+        _ => {
+            let mut auto = auto;
+            auto.notes.push(resume::all_limited_warning(&owner.name));
             Ok((owner, auto))
+        }
+    }
+}
+
+/// A handoff of `thread` from `owner` to a different account.
+struct Hop<'a, 'b> {
+    cx: &'b AutoContext<'a>,
+    home: &'b std::ffi::OsStr,
+    owner: &'a config::Account,
+    thread: &'b handoff::Thread,
+    intent: &'b resume::Intent,
+    now: u64,
+}
+
+impl<'a> Hop<'a, '_> {
+    /// Copies the session to `chosen` and gives the launch there. When the
+    /// copy fails, the session stays in the owner. A paid target gets the
+    /// paid banner and no pick state; the caller has its consent.
+    fn run(
+        &self,
+        chosen: &pick::Candidate,
+        reason: &str,
+        mut auto: Auto,
+        args: &mut Vec<OsString>,
+    ) -> (&'a config::Account, Auto) {
+        let config = self.cx.config;
+        let (owner, thread, now) = (self.owner, self.thread, self.now);
+        let target = config
+            .account(&chosen.name)
+            .expect("each candidate is a configured account");
+        // A dry run copies nothing. It shows the launch for a new copy.
+        let done = if self.cx.dry_run {
+            Ok((thread.id.clone(), false))
+        } else {
+            let mut warnings = Vec::new();
+            let done = handoff::handoff(
+                self.home,
+                owner,
+                target,
+                thread,
+                SystemTime::now(),
+                &mut |w| warnings.push(format!("ccx: warning: {w}")),
+            );
+            auto.notes.extend(warnings);
+            done.map(|d| (d.id, d.plan == handoff::Plan::Fork))
+        };
+        match done {
+            Ok((id, fork)) => {
+                let fork = fork.then_some(id.as_str());
+                auto.notes
+                    .push(resume::banner(&owner.name, &target.name, reason, fork));
+                if chosen.paid {
+                    auto.banner = Some(paid::banner(&chosen.name));
+                    auto.paid_consent = true;
+                } else {
+                    auto.banner = Some(pick::banner(chosen, now, pick::local_clock));
+                    auto.state =
+                        Some((pick::state_path(self.home), chosen_state(&chosen.name, now)));
+                }
+                *args = resume::target_args(args, self.intent, &id);
+                (target, auto)
+            }
+            Err(e) => {
+                auto.notes.push(format!(
+                    "ccx: warning: cannot hand off to {}: {e}; the session stays in {}",
+                    target.name, owner.name
+                ));
+                (owner, auto)
+            }
         }
     }
 }

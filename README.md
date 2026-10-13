@@ -144,8 +144,9 @@ Then:
 
 1. If the owner is not limited, ccx launches the owner. It copies no files.
 2. If the owner is limited (the same rules as automatic selection), ccx picks a target account with automatic selection. It copies the session with the handoff rules above and runs `claude --resume <id>` in the target. ccx changes `-c` to `--resume <id>`. If the handoff writes a fork, ccx resumes the fork.
-3. If all accounts are limited, ccx launches the owner and shows a warning.
-4. If the handoff refuses, for example because the session is open, ccx launches the owner and shows a warning.
+3. If the owner is an [API-key account](#api-key-accounts-paid-fallback) and a subscription account is not limited, ccx hands off to the subscription account that automatic selection picks. It does not ask.
+4. If all subscription accounts are limited, ccx asks `All subscription accounts are limited. Use paid account NAME? [y/N]`. NAME is the owner when the owner is an API-key account, else the first API-key account. With `--allow-paid`, ccx does not ask. If you answer yes, ccx resumes on the paid account (with a handoff when the owner is a subscription account). If you answer no, or there is no terminal and no `--allow-paid`, the session stays in a subscription owner and ccx shows a warning. A session of an API-key owner goes to the subscription account with the soonest reset.
+5. If the handoff refuses, for example because the session is open, ccx launches the owner and shows a warning.
 
 On a terminal, ccx shows a banner that names the owner, the target and the reason, for example `ccx: handoff main → angel2 (main limited: 5h 92%)`. For a fork, the banner also shows the new session id. ccx shows the banner and the warnings only when stdout and stderr are terminals, and not for `-p`.
 

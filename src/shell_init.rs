@@ -120,7 +120,7 @@ pub fn valid_identifier(word: &str) -> bool {
 }
 
 /// Single quotes for sh, bash and zsh. A `'` becomes `'\''`.
-fn posix_quote(text: &str) -> String {
+pub(crate) fn posix_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', r"'\''"))
 }
 

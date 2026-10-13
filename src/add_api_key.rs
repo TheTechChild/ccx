@@ -19,6 +19,7 @@ use crate::adopt;
 use crate::config::{self, KeySource, Result};
 use crate::env::Env;
 use crate::keystore::{self, SecretStore};
+use crate::shell_init::posix_quote;
 use crate::sync;
 
 /// The mode of a new `config.toml`.
@@ -54,7 +55,7 @@ pub fn run(parent: &Env, args: &Args) -> Result<()> {
     for line in plan(name, &dir, &wanted, &key_file) {
         println!("  - {line}");
     }
-    let retry = format!("ccx manage add {name} --api-key -y");
+    let retry = retry_command(args);
     if !adopt::confirm(args.yes, "Continue?", &retry)? {
         println!("Nothing changed.");
         return Ok(());
@@ -233,11 +234,59 @@ pub fn store_key(
     Ok(KeySource::File)
 }
 
+/// The command that runs the same add again with `-y`. It keeps the flags
+/// that change the plan, so that the retry uses the same key backend and
+/// the same dir.
+pub fn retry_command(args: &Args) -> String {
+    let mut text = format!("ccx manage add {} --api-key", args.name);
+    if let Some(dir) = &args.dir {
+        text.push_str(&format!(" --dir {}", posix_quote(dir)));
+    }
+    if let Some(command) = &args.key_command {
+        text.push_str(&format!(" --key-command {}", posix_quote(command)));
+    }
+    if args.key_file {
+        text.push_str(" --key-file");
+    }
+    text.push_str(" -y");
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::keystore::tests::FakeStore;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn retry_command_keeps_the_backend_and_the_dir() {
+        let args = |name: &str| Args {
+            name: name.into(),
+            api_key: true,
+            ..Args::default()
+        };
+        assert_eq!(
+            retry_command(&args("paid")),
+            "ccx manage add paid --api-key -y"
+        );
+        let with_command = Args {
+            dir: Some("/tmp/my dir".into()),
+            key_command: Some("op read 'op://x/y'".into()),
+            ..args("paid")
+        };
+        assert_eq!(
+            retry_command(&with_command),
+            r"ccx manage add paid --api-key --dir '/tmp/my dir' --key-command 'op read '\''op://x/y'\''' -y"
+        );
+        let with_file = Args {
+            key_file: true,
+            ..args("paid")
+        };
+        assert_eq!(
+            retry_command(&with_file),
+            "ccx manage add paid --api-key --key-file -y"
+        );
+    }
 
     #[test]
     fn a_working_store_keeps_the_key_and_writes_no_file() {

@@ -3,10 +3,12 @@
 //!
 //! ccx finds the account that owns the session from the files on disk. When
 //! the owner is not limited, ccx launches the owner. When the owner is
-//! limited, ccx picks a target with automatic selection, copies the session
-//! with `ccx handoff` (#14) and resumes it there. When all accounts are
-//! limited, ccx launches the owner with a warning. A bare `--resume` opens
-//! the session picker of Claude Code, so it never does a handoff.
+//! limited, or is a paid API-key account (#20), ccx picks a target with
+//! automatic selection, copies the session with `ccx handoff` (#14) and
+//! resumes it there. When all subscription accounts are limited, ccx can
+//! offer a paid account; else it launches the owner with a warning. A bare
+//! `--resume` opens the session picker of Claude Code, so it never does a
+//! handoff.
 
 use std::ffi::OsString;
 
@@ -103,18 +105,22 @@ pub fn target_args(args: &[OsString], intent: &Intent, id: &str) -> Vec<OsString
 /// Where the session goes.
 #[derive(Debug, PartialEq)]
 pub enum Route {
-    /// The owner is not limited: launch the owner and copy nothing.
+    /// The owner is a subscription account that is not limited: launch the
+    /// owner and copy nothing.
     Owner,
-    /// All accounts are limited: launch the owner with a warning.
-    AllLimited,
-    /// The owner is limited: hand off to `candidates[index]`. `reason`
-    /// tells which windows of the owner are at their limits.
+    /// No subscription account other than the owner is usable. `decision`
+    /// is the pick with the soonest reset, or `None` when there is no
+    /// subscription candidate. ccx can offer a paid account (#20).
+    AllLimited { decision: Option<pick::Decision> },
+    /// Hand off to `candidates[index]`. `reason` tells why the session
+    /// leaves the owner, for example `main limited: 5h 92%`.
     Handoff { index: usize, reason: String },
 }
 
-/// Selects the route with the rules of automatic selection (#10).
+/// Selects the route with the rules of automatic selection (#10, #20).
 /// `candidates` are the enabled accounts, the same as for `ccx` with no
-/// arguments.
+/// arguments. A paid owner is never a first choice: the session goes to a
+/// usable subscription account.
 pub fn route(
     candidates: &[Candidate],
     owner: &Candidate,
@@ -124,12 +130,21 @@ pub fn route(
     now_ms: u64,
 ) -> Route {
     let model = model_arg.or(owner.settings_model.as_deref());
-    let Some(usage) = owner
-        .usage
-        .as_ref()
-        .filter(|u| pick::limited(Some(u), config, model, now_ms))
-    else {
-        return Route::Owner;
+    let reason = if owner.paid {
+        paid_reason(&owner.name)
+    } else {
+        let Some(usage) = owner
+            .usage
+            .as_ref()
+            .filter(|u| pick::limited(Some(u), config, model, now_ms))
+        else {
+            return Route::Owner;
+        };
+        format!(
+            "{} limited: {}",
+            owner.name,
+            pick::limit_text(usage, config, model, now_ms)
+        )
     };
     match pick::pick(candidates, last, model_arg, config, now_ms) {
         Some(decision)
@@ -138,18 +153,28 @@ pub fn route(
         {
             Route::Handoff {
                 index: decision.index,
-                reason: pick::limit_text(usage, config, model, now_ms),
+                reason,
             }
         }
-        _ => Route::AllLimited,
+        Some(decision) if matches!(decision.reason, pick::Reason::AllLimited { .. }) => {
+            Route::AllLimited {
+                decision: Some(decision),
+            }
+        }
+        _ => Route::AllLimited { decision: None },
     }
+}
+
+/// The handoff reason when the owner is a paid API-key account.
+pub fn paid_reason(owner: &str) -> String {
+    format!("{owner} is a paid API-key account")
 }
 
 /// The handoff banner, for example
 /// `ccx: handoff main → angel2 (main limited: 5h 92%)`. A fork adds the new
 /// session id.
 pub fn banner(owner: &str, target: &str, reason: &str, fork: Option<&str>) -> String {
-    let mut text = format!("ccx: handoff {owner} → {target} ({owner} limited: {reason})");
+    let mut text = format!("ccx: handoff {owner} → {target} ({reason})");
     if let Some(id) = fork {
         text.push_str(&format!(
             "; {target} had a different copy, new session id {id}"
@@ -282,37 +307,75 @@ mod tests {
             route(&[cand("a", Some(92.0)), cand("b", Some(10.0))], 0),
             Route::Handoff {
                 index: 1,
-                reason: "5h 92%".into()
+                reason: "a limited: 5h 92%".into()
             }
         );
-        // All accounts are limited.
-        assert_eq!(
+        // All accounts are limited: the soonest reset is in the route.
+        assert!(matches!(
             route(&[cand("a", Some(92.0)), cand("b", Some(99.0))], 0),
-            Route::AllLimited
-        );
+            Route::AllLimited {
+                decision: Some(pick::Decision { index: 0, .. })
+            }
+        ));
         // A limited owner that is not a candidate (a disabled account).
         let owner = cand("off", Some(95.0));
         assert_eq!(
             super::route(&[cand("b", Some(0.0))], &owner, None, None, &cfg(), NOW),
             Route::Handoff {
                 index: 0,
-                reason: "5h 95%".into()
+                reason: "off limited: 5h 95%".into()
             }
         );
         assert_eq!(
             super::route(&[], &owner, None, None, &cfg(), NOW),
-            Route::AllLimited
+            Route::AllLimited { decision: None }
+        );
+    }
+
+    fn paid(name: &str) -> Candidate {
+        Candidate {
+            paid: true,
+            ..cand(name, None)
+        }
+    }
+
+    #[test]
+    fn a_paid_owner_goes_to_a_usable_subscription_account() {
+        let cands = [paid("paid"), cand("a", Some(80.0)), cand("b", Some(10.0))];
+        assert_eq!(
+            route(&cands, &cands[0], None, None, &cfg(), NOW),
+            Route::Handoff {
+                index: 2,
+                reason: "paid is a paid API-key account".into()
+            }
+        );
+    }
+
+    #[test]
+    fn a_paid_owner_with_all_subscription_accounts_limited() {
+        let cands = [paid("paid"), cand("a", Some(95.0))];
+        assert!(matches!(
+            route(&cands, &cands[0], None, None, &cfg(), NOW),
+            Route::AllLimited {
+                decision: Some(pick::Decision { index: 1, .. })
+            }
+        ));
+        // Only paid accounts: no subscription account to go to.
+        let cands = [paid("paid")];
+        assert_eq!(
+            route(&cands, &cands[0], None, None, &cfg(), NOW),
+            Route::AllLimited { decision: None }
         );
     }
 
     #[test]
     fn banner_and_warning_text() {
         assert_eq!(
-            banner("main", "angel2", "5h 92%", None),
+            banner("main", "angel2", "main limited: 5h 92%", None),
             "ccx: handoff main → angel2 (main limited: 5h 92%)"
         );
         assert_eq!(
-            banner("main", "angel2", "wk 96%", Some(ID)),
+            banner("main", "angel2", "main limited: wk 96%", Some(ID)),
             format!(
                 "ccx: handoff main → angel2 (main limited: wk 96%); angel2 had a different copy, new session id {ID}"
             )
