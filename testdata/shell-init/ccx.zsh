@@ -128,6 +128,15 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(spend)
+_arguments "${_arguments_options[@]}" : \
+'--month=[The month in local time, as YYYY-MM. The default is the current month]:YYYY-MM:_default' \
+'--json[Print stable JSON]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::account -- The account, for example `@paid`. The default is all API-key accounts:_default' \
+&& ret=0
+;;
 (shell-init)
 _arguments "${_arguments_options[@]}" : \
 '-h[Print help (see more with '\''--help'\'')]' \
@@ -300,6 +309,7 @@ _ccx__subcmd__manage_commands() {
 'rm:Remove an account from the config. Keep its dir' \
 'bootstrap:Set up ccx on a new machine in one command' \
 'list:Show each configured account' \
+'spend:Show an estimate of the money that each API-key account used in a month' \
 'shell-init:Print shell code for the profile\: completions and account aliases' \
 'sync:Link the shared setup of the base account into other accounts' \
 'doctor:Check the setup and show the problems' \
@@ -385,6 +395,11 @@ _ccx__subcmd__manage__subcmd__service__subcmd__uninstall_commands() {
 _ccx__subcmd__manage__subcmd__shell-init_commands() {
     local commands; commands=()
     _describe -t commands 'ccx manage shell-init commands' commands "$@"
+}
+(( $+functions[_ccx__subcmd__manage__subcmd__spend_commands] )) ||
+_ccx__subcmd__manage__subcmd__spend_commands() {
+    local commands; commands=()
+    _describe -t commands 'ccx manage spend commands' commands "$@"
 }
 (( $+functions[_ccx__subcmd__manage__subcmd__sync_commands] )) ||
 _ccx__subcmd__manage__subcmd__sync_commands() {

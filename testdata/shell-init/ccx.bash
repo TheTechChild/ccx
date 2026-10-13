@@ -74,6 +74,9 @@ _ccx() {
             ccx__subcmd__manage,shell-init)
                 cmd="ccx__subcmd__manage__subcmd__shell__subcmd__init"
                 ;;
+            ccx__subcmd__manage,spend)
+                cmd="ccx__subcmd__manage__subcmd__spend"
+                ;;
             ccx__subcmd__manage,sync)
                 cmd="ccx__subcmd__manage__subcmd__sync"
                 ;;
@@ -166,7 +169,7 @@ _ccx() {
             return 0
             ;;
         ccx__subcmd__manage)
-            opts="-h --help adopt add login logout edit edit-config rm bootstrap list shell-init sync doctor service"
+            opts="-h --help adopt add login logout edit edit-config rm bootstrap list spend shell-init sync doctor service"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -410,6 +413,24 @@ _ccx() {
                 return 0
             fi
             case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        ccx__subcmd__manage__subcmd__spend)
+            opts="-h --month --json --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --month)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;

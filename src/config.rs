@@ -29,6 +29,9 @@ pub struct Config {
     pub pick: Pick,
     pub usage: Usage,
     pub prefs: Prefs,
+    /// Prices per model from `[pricing.<model>]` (#24). They override the
+    /// built-in price table of `ccx manage spend`.
+    pub pricing: BTreeMap<String, Price>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -111,6 +114,15 @@ pub struct Prefs {
     pub deny: Vec<String>,
 }
 
+/// The price of one model in USD for each million tokens (#24).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Price {
+    pub input: f64,
+    pub output: f64,
+    pub cache_write: f64,
+    pub cache_read: f64,
+}
+
 impl Config {
     pub fn account(&self, name: &str) -> Option<&Account> {
         self.accounts.iter().find(|a| a.name == name)
@@ -141,6 +153,17 @@ struct RawConfig {
     pick: Option<RawPick>,
     usage: Option<RawUsage>,
     prefs: Option<RawPrefs>,
+    #[serde(default)]
+    pricing: BTreeMap<String, RawPrice>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPrice {
+    input: Option<f64>,
+    output: Option<f64>,
+    cache_write: Option<f64>,
+    cache_read: Option<f64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -404,6 +427,23 @@ fn build(raw: RawConfig, home: &OsStr) -> Result<Config> {
             usage.min_interval_secs, usage.max_interval_secs
         ));
     }
+    let mut pricing = BTreeMap::new();
+    for (model, raw_price) in raw.pricing {
+        let value = |key: &str, value: Option<f64>| match value {
+            Some(v) if v.is_finite() && v >= 0.0 => Ok(v),
+            Some(_) => Err(format!(
+                "pricing.{model}.{key}: must be a number that is 0 or more"
+            )),
+            None => Err(format!("pricing.{model}: missing key `{key}`")),
+        };
+        let price = Price {
+            input: value("input", raw_price.input)?,
+            output: value("output", raw_price.output)?,
+            cache_write: value("cache_write", raw_price.cache_write)?,
+            cache_read: value("cache_read", raw_price.cache_read)?,
+        };
+        pricing.insert(model, price);
+    }
     let prefs = raw.prefs.unwrap_or_default();
     let launch = raw.launch.unwrap_or_default();
     Ok(Config {
@@ -419,6 +459,7 @@ fn build(raw: RawConfig, home: &OsStr) -> Result<Config> {
             allow: prefs.allow.unwrap_or_default(),
             deny: prefs.deny.unwrap_or_default(),
         },
+        pricing,
     })
 }
 
@@ -1020,5 +1061,62 @@ mod tests {
             err,
             "config.local.toml: account `extra` is not in config.toml"
         );
+    }
+
+    // Pricing (#24).
+
+    #[test]
+    fn pricing_is_empty_by_default() {
+        assert!(parse_ok(MINIMAL).pricing.is_empty());
+    }
+
+    #[test]
+    fn pricing_entries_load_with_integers_and_fractions() {
+        let config = parse_ok(&format!(
+            "{MINIMAL}\n[pricing.claude-opus-5-5]\ninput = 4\noutput = 20\ncache_write = 5\ncache_read = 0.2\n"
+        ));
+        let price = config.pricing["claude-opus-5-5"];
+        assert_eq!(
+            price,
+            Price {
+                input: 4.0,
+                output: 20.0,
+                cache_write: 5.0,
+                cache_read: 0.2,
+            }
+        );
+    }
+
+    #[test]
+    fn pricing_needs_all_four_prices_and_no_other_key() {
+        let missing = parse_err(&format!(
+            "{MINIMAL}\n[pricing.m]\ninput = 1\noutput = 2\ncache_write = 3\n"
+        ));
+        assert!(missing.contains("cache_read"), "{missing}");
+        let unknown = parse_err(&format!(
+            "{MINIMAL}\n[pricing.m]\ninput = 1\noutput = 2\ncache_write = 3\ncache_read = 4\nbatch = 1\n"
+        ));
+        assert!(unknown.contains("batch"), "{unknown}");
+    }
+
+    #[test]
+    fn pricing_rejects_a_negative_price() {
+        let err = parse_err(&format!(
+            "{MINIMAL}\n[pricing.m]\ninput = -1\noutput = 2\ncache_write = 3\ncache_read = 4\n"
+        ));
+        assert_eq!(
+            err,
+            "config.toml: pricing.m.input: must be a number that is 0 or more"
+        );
+    }
+
+    #[test]
+    fn overlay_can_change_one_price() {
+        let main = format!(
+            "{MINIMAL}\n[pricing.m]\ninput = 1\noutput = 2\ncache_write = 3\ncache_read = 4\n"
+        );
+        let config = parse_with(&main, Some("[pricing.m]\noutput = 9\n")).unwrap();
+        assert_eq!(config.pricing["m"].output, 9.0);
+        assert_eq!(config.pricing["m"].input, 1.0);
     }
 }
