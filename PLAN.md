@@ -40,6 +40,7 @@ Follow-up issues: #21 (TUI wizards), #22 (adaptive refresh interval), #23 (direc
 - [ADR 0004](docs/adr/0004-usage-source.md): the usage source is `claude -p "/usage" --output-format stream-json`, with `cachedUsageUtilization` as the fallback.
 - [ADR 0005](docs/adr/0005-m0-usage-hooks-off.md): M0 test 1. Hooks stay off for the `/usage` fetch.
 - [ADR 0006](docs/adr/0006-m0-session-file-layout.md): M0 test 4. The session file layout and the cwd encoding rule.
+- [ADR 0007](docs/adr/0007-m0-manual-tests.md): M0 tests 2, 3, 5 and 6. All pass. The caveats change #13, #14 and #15.
 
 ## Decisions from the grilling session
 
@@ -69,14 +70,16 @@ Follow-up issues: #21 (TUI wizards), #22 (adaptive refresh interval), #23 (direc
 
 ## M0 results that change later issues
 
-Tests 1 and 4 are done (claude 2.1.296). Tests 2, 3, 5 and 6 wait for Clayton (planned stop 1).
+All six tests are done (claude 2.1.296). All pass. No approved fallback is necessary.
 
 - **#9:** use the `/usage` command of ADR 0005 with `--settings '{"disableAllHooks":true}'`. Read `usage_report` from the top level of the `assistant` event, not from `message`. Accept `resets_at: null`. The fetch makes an empty `projects/<encoded cwd>/memory/` directory, so always run it from one fixed probe directory.
 - **#14:** the handoff file set is `projects/<enc>/<id>.jsonl`, every `projects/*/<id>/` directory (a sidecar can be in a different `projects/` directory), `file-history/<id>/`, `session-env/<id>/` (empty in all cases seen) and `plans/<slug>.md` for each `slug` in the transcript. Do not copy `todos/` (not written), `memory/` or `jobs/`. Implement the cwd encoding rule of ADR 0006 with its golden examples.
 - **#14, #15:** a session is open when `sessions/<pid>.json` has the `sessionId`, the `pid` is alive and its start time agrees with `procStart` (UTC, `ps -o lstart=` format). Never read `sessions/*.key`.
+- **#13:** the service writes the absolute path to `claude`. `service status` and `doctor` show an error when that path does not exist (ADR 0007).
+- **#14, #15:** when `oauthAccount.organizationUuid` is different in the two accounts, show a warning before the handoff: Claude cannot use the earlier thinking, and the next responses can use more tokens (ADR 0007).
 
 ## Planned stops
 
-1. **After #6:** Clayton runs M0 tests 2, 3, 5 and 6.
+1. **After #6:** Clayton runs M0 tests 2, 3, 5 and 6. Done: all pass.
 2. **At #12:** Clayton pushes the `v0.1.0` tag and does the Linux install check.
 3. **Any M0 result that has no approved fallback:** stop and ask Clayton.
