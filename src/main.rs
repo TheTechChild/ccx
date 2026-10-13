@@ -8,6 +8,7 @@ mod launch;
 mod list;
 mod paths;
 mod pick;
+mod prefs;
 mod refresh;
 mod resume;
 mod service;
@@ -119,6 +120,10 @@ enum Manage {
         /// Stop after sync. Do not log in.
         #[arg(long)]
         no_login: bool,
+        /// Do not copy the user MCP servers and the preferences of the
+        /// base account after the login.
+        #[arg(long)]
+        no_prefs: bool,
         /// Confirm the plan without a prompt.
         #[arg(short, long)]
         yes: bool,
@@ -144,6 +149,10 @@ enum Manage {
     /// Sync shows a plan: LINK, OK, RELINK, CONFLICT, SKIP and MKDIR. It
     /// moves a CONFLICT item to `<dir>/.ccx-backup/<timestamp>/` only with
     /// `--force` or after you confirm. It never changes the base account.
+    ///
+    /// With `--prefs`, sync does not link. It copies the user MCP servers
+    /// (through `claude mcp add-json -s user`) and the allowlisted keys of
+    /// the base `~/.claude.json` into the account.
     Sync {
         /// The account to sync.
         #[arg(required_unless_present = "all")]
@@ -157,6 +166,10 @@ enum Manage {
         /// Move CONFLICT items to the backup without a prompt.
         #[arg(long)]
         force: bool,
+        /// Copy the user MCP servers and the allowlisted preferences of
+        /// the base account. Do not link.
+        #[arg(long, conflicts_with = "force")]
+        prefs: bool,
     },
     /// Check the setup and show the problems.
     ///
@@ -242,6 +255,7 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
                     dir,
                     email,
                     no_login,
+                    no_prefs,
                     yes,
                 } => add::run(
                     &env,
@@ -250,6 +264,7 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
                         dir,
                         email,
                         no_login,
+                        no_prefs,
                         yes,
                     },
                 )?,
@@ -260,8 +275,14 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
                     all: _,
                     dry_run,
                     force,
+                    prefs,
                 } => {
-                    if !sync::run(&env, name.as_deref(), dry_run, force)? {
+                    let ok = if prefs {
+                        prefs::run(&env, name.as_deref(), dry_run)?
+                    } else {
+                        sync::run(&env, name.as_deref(), dry_run, force)?
+                    };
+                    if !ok {
                         return Ok(ExitCode::FAILURE);
                     }
                 }

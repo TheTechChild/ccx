@@ -56,6 +56,7 @@ _arguments "${_arguments_options[@]}" : \
 '--dir=[The account dir. The default is \`~/.claude-NAME\`]:DIR:_default' \
 '--email=[The email to give to \`claude auth login --email\`]:EMAIL:_default' \
 '--no-login[Stop after sync. Do not log in]' \
+'--no-prefs[Do not copy the user MCP servers and the preferences of the base account after the login]' \
 '-y[Confirm the plan without a prompt]' \
 '--yes[Confirm the plan without a prompt]' \
 '-h[Print help (see more with '\''--help'\'')]' \
@@ -82,6 +83,7 @@ _arguments "${_arguments_options[@]}" : \
 '()--all[Sync all accounts other than the base account]' \
 '--dry-run[Show the plan and change nothing]' \
 '--force[Move CONFLICT items to the backup without a prompt]' \
+'(--force)--prefs[Copy the user MCP servers and the allowlisted preferences of the base account. Do not link]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '::name -- The account to sync:_default' \

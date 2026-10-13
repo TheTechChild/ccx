@@ -23,6 +23,7 @@ use crate::env::Env;
 use crate::launch;
 use crate::paths::{canonical, tilde};
 use crate::pick;
+use crate::prefs;
 use crate::status::{self, Auth};
 use crate::sync::{self, Class};
 
@@ -45,6 +46,8 @@ pub struct Args {
     pub email: Option<String>,
     /// Stop after sync. Do not log in.
     pub no_login: bool,
+    /// Do not copy the MCP servers and the preferences after the login.
+    pub no_prefs: bool,
     /// Confirm the plan without a prompt.
     pub yes: bool,
 }
@@ -175,7 +178,30 @@ pub fn run(parent: &Env, args: &Args) -> Result<()> {
         Some(info) => println!("{}", info.line(&args.name)),
         None => println!("No login. To log in, run `ccx @{} auth login`.", args.name),
     }
+    if claude.is_some() && !args.no_prefs {
+        copy_prefs(parent, &config, &account, claude);
+    }
     Ok(())
+}
+
+/// Copies the user MCP servers and the allowlisted preferences of the base
+/// account into the new account (#17). A failure is only a warning: the
+/// account is in the config, and `ccx manage sync --prefs` can try again.
+fn copy_prefs(parent: &Env, config: &Config, account: &Account, claude: Option<PathBuf>) {
+    let copied = prefs::Copier::new(parent, config, claude)
+        .and_then(|copier| copier.map_or(Ok(true), |c| c.copy(account, false)));
+    let error = match copied {
+        Ok(true) => return,
+        Ok(false) => None,
+        Err(e) => Some(e),
+    };
+    if let Some(e) = error {
+        eprintln!("ccx: warning: {e}");
+    }
+    eprintln!(
+        "ccx: warning: the copy of the MCP servers and the preferences is not complete. To try again, run `ccx manage sync --prefs {}`.",
+        account.name
+    );
 }
 
 /// The canonical dir and its text for `config.toml`. A dir in HOME starts
@@ -256,6 +282,12 @@ pub fn plan(args: &Args, dir: &Path) -> Vec<String> {
     lines.push(format!("add account {} to config.toml", args.name));
     if !args.no_login || args.email.is_some() {
         lines.push("write the email only to config.local.toml (mode 0600)".to_string());
+    }
+    if !args.no_login && !args.no_prefs {
+        lines.push(
+            "copy the user MCP servers (`claude mcp add-json -s user`) and the allowlisted preferences of the base account"
+                .to_string(),
+        );
     }
     lines
 }
@@ -460,6 +492,11 @@ mod tests {
             "run `claude auth login --email work@example.com` with CLAUDE_CONFIG_DIR=/home/test/.claude-work"
         ));
         assert!(text.contains("config.local.toml"));
+        assert!(text.contains("claude mcp add-json -s user"));
+
+        args.no_prefs = true;
+        let text = plan(&args, dir).join("\n");
+        assert!(!text.contains("mcp add-json"), "{text}");
 
         args.no_login = true;
         args.email = None;

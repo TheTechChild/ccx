@@ -28,6 +28,7 @@ pub struct Config {
     pub accounts: Vec<Account>,
     pub pick: Pick,
     pub usage: Usage,
+    pub prefs: Prefs,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -71,6 +72,15 @@ pub struct Usage {
     pub refresh_min_gap_secs: u64,
 }
 
+/// Changes to the built-in allowlist of `.claude.json` keys (#17).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Prefs {
+    /// Keys to add to the allowlist.
+    pub allow: Vec<String>,
+    /// Keys to remove from the allowlist.
+    pub deny: Vec<String>,
+}
+
 impl Config {
     pub fn account(&self, name: &str) -> Option<&Account> {
         self.accounts.iter().find(|a| a.name == name)
@@ -100,6 +110,7 @@ struct RawConfig {
     accounts: BTreeMap<String, RawAccount>,
     pick: Option<RawPick>,
     usage: Option<RawUsage>,
+    prefs: Option<RawPrefs>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -141,6 +152,13 @@ struct RawUsage {
     fresh_minutes: Option<u64>,
     fetch_timeout_secs: Option<u64>,
     refresh_min_gap_secs: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPrefs {
+    allow: Option<Vec<String>>,
+    deny: Option<Vec<String>>,
 }
 
 /// The path of `config.toml`: `$CCX_CONFIG`, else
@@ -329,6 +347,7 @@ fn build(raw: RawConfig, home: &OsStr) -> Result<Config> {
         fetch_timeout_secs: usage.fetch_timeout_secs.unwrap_or(5),
         refresh_min_gap_secs: usage.refresh_min_gap_secs.unwrap_or(60),
     };
+    let prefs = raw.prefs.unwrap_or_default();
     let launch = raw.launch.unwrap_or_default();
     Ok(Config {
         launch: Launch {
@@ -339,6 +358,10 @@ fn build(raw: RawConfig, home: &OsStr) -> Result<Config> {
         accounts,
         pick,
         usage,
+        prefs: Prefs {
+            allow: prefs.allow.unwrap_or_default(),
+            deny: prefs.deny.unwrap_or_default(),
+        },
     })
 }
 
@@ -496,6 +519,7 @@ mod tests {
         assert!(config.launch.banner);
         assert_eq!(config.launch.claude_bin, None);
         assert_eq!(config.base_repo, None);
+        assert_eq!(config.prefs, Prefs::default());
     }
 
     #[test]
@@ -553,8 +577,14 @@ mod tests {
             fresh_minutes = 1
             fetch_timeout_secs = 2
             refresh_min_gap_secs = 3
+
+            [prefs]
+            allow = ["fooPref"]
+            deny = ["verbose"]
             "#,
         );
+        assert_eq!(config.prefs.allow, ["fooPref"]);
+        assert_eq!(config.prefs.deny, ["verbose"]);
         assert_eq!(
             config.launch.claude_bin,
             Some(PathBuf::from("/home/test/bin/claude"))

@@ -47,6 +47,7 @@ complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcomma
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from add" -l dir -d 'The account dir. The default is `~/.claude-NAME`' -r
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from add" -l email -d 'The email to give to `claude auth login --email`' -r
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from add" -l no-login -d 'Stop after sync. Do not log in'
+complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from add" -l no-prefs -d 'Do not copy the user MCP servers and the preferences of the base account after the login'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from add" -s y -l yes -d 'Confirm the plan without a prompt'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from add" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from list" -l json -d 'Print stable JSON'
@@ -55,6 +56,7 @@ complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcomma
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from sync" -l all -d 'Sync all accounts other than the base account'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from sync" -l dry-run -d 'Show the plan and change nothing'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from sync" -l force -d 'Move CONFLICT items to the backup without a prompt'
+complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from sync" -l prefs -d 'Copy the user MCP servers and the allowlisted preferences of the base account. Do not link'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from sync" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from doctor" -l json -d 'Print the results as JSON'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from doctor" -s h -l help -d 'Print help (see more with \'--help\')'

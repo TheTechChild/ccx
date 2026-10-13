@@ -396,6 +396,16 @@ pub fn is_session_file(name: &str) -> bool {
 /// The pid of an open session `id` in the account directory `dir`, from
 /// the `sessions/<pid>.json` files (ADR 0006).
 pub fn open_pid(dir: &Path, id: &str) -> Option<u32> {
+    running_pid(dir, |value| {
+        value.get("sessionId").and_then(Value::as_str) == Some(id)
+    })
+}
+
+/// The pid of the first running session in the account directory `dir`
+/// whose `sessions/<pid>.json` agrees with `matches`. A session runs when
+/// its `pid` is a live process and the start time agrees with `procStart`.
+/// ccx reads only the `<pid>.json` files, never the `*.key` files.
+pub fn running_pid(dir: &Path, matches: impl Fn(&Value) -> bool) -> Option<u32> {
     let entries = fs::read_dir(dir.join("sessions")).ok()?;
     for entry in entries.flatten() {
         let name = entry.file_name();
@@ -408,7 +418,7 @@ pub fn open_pid(dir: &Path, id: &str) -> Option<u32> {
         let Ok(value) = serde_json::from_slice::<Value>(&text) else {
             continue;
         };
-        if value.get("sessionId").and_then(Value::as_str) != Some(id) {
+        if !matches(&value) {
             continue;
         }
         let Some(pid) = value
