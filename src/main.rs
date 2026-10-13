@@ -399,4 +399,37 @@ mod tests {
     fn cli_definition_is_valid() {
         Cli::command().debug_assert();
     }
+
+    /// The release archives include `completions/` (`dist-workspace.toml`).
+    /// The files must agree with the CLI. To update them, run
+    /// `CCX_UPDATE_GOLDEN=1 mise run test` and check the diff.
+    #[test]
+    fn completion_files_agree_with_the_cli() {
+        use shell_init::Shell;
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("completions");
+        let update = std::env::var_os("CCX_UPDATE_GOLDEN").is_some();
+        for shell in [Shell::Zsh, Shell::Bash, Shell::Fish] {
+            let path = dir.join(shell_init::completion_file_name(shell));
+            let want = shell_init::completion_file(shell, Cli::command());
+            if update {
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(&path, &want).unwrap();
+                continue;
+            }
+            let have = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            assert!(
+                have == want,
+                "{} differs from the CLI; run with CCX_UPDATE_GOLDEN=1 to update",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn zsh_completion_file_is_an_autoload_file() {
+        let text = shell_init::completion_file(shell_init::Shell::Zsh, Cli::command());
+        assert!(text.starts_with("#compdef ccx\n"), "{text}");
+        assert!(!text.contains("$+functions[compdef]"));
+    }
 }
