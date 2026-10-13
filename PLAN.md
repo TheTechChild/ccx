@@ -42,6 +42,7 @@ Follow-up issues: #21 (TUI wizards), #22 (adaptive refresh interval), #23 (direc
 - [ADR 0006](docs/adr/0006-m0-session-file-layout.md): M0 test 4. The session file layout and the cwd encoding rule.
 - [ADR 0007](docs/adr/0007-m0-manual-tests.md): M0 tests 2, 3, 5 and 6. All pass. The caveats change #13, #14 and #15.
 - [ADR 0008](docs/adr/0008-sync-share-lists.md): the share list, the never-share list and the shared `plugins/synced` risk of `ccx manage sync`.
+- [ADR 0009](docs/adr/0009-handoff-fork-by-rewrite.md): `ccx handoff` makes a fork with a new session id itself. It does not use `--fork-session`.
 
 ## Decisions from the grilling session
 

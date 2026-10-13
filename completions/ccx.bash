@@ -79,7 +79,7 @@ _ccx() {
             return 0
             ;;
         ccx__subcmd__handoff)
-            opts="-h --help"
+            opts="-h --all --no-resume --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
