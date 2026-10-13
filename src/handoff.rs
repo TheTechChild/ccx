@@ -186,6 +186,35 @@ pub fn list(config: &Config, enc: Option<&str>) -> Vec<Thread> {
     threads
 }
 
+/// The transcript `projects/*/<id>.jsonl` of session `id` in all accounts.
+/// When more than one account has it, the newest copy wins. On a tie, the
+/// first account in name order wins.
+pub fn find_by_id(config: &Config, id: &str) -> Option<Thread> {
+    if !is_session_id(id) {
+        return None;
+    }
+    let file = format!("{id}.jsonl");
+    let file = file.as_str();
+    config
+        .accounts
+        .iter()
+        .flat_map(|account| {
+            child_dirs(&account.dir.join("projects"))
+                .into_iter()
+                .filter_map(move |dir| {
+                    let path = dir.join(file);
+                    let meta = fs::metadata(&path).ok().filter(|m| m.is_file())?;
+                    Some(Thread {
+                        id: id.to_string(),
+                        account: account.name.clone(),
+                        path,
+                        modified: meta.modified().unwrap_or(UNIX_EPOCH),
+                    })
+                })
+        })
+        .min_by(|a, b| b.modified.cmp(&a.modified))
+}
+
 /// Reads the first user prompt and the `cwd` field from the start of a
 /// transcript.
 pub fn summary(reader: impl BufRead) -> Summary {
@@ -679,7 +708,7 @@ fn account<'a>(config: &'a Config, text: &str) -> Result<&'a Account> {
 }
 
 /// The physical path of the current directory.
-fn physical_cwd() -> Result<String> {
+pub fn physical_cwd() -> Result<String> {
     let cwd = std::env::current_dir()
         .and_then(fs::canonicalize)
         .map_err(|e| format!("cannot get the current directory: {e}"))?;

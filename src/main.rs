@@ -8,6 +8,7 @@ mod list;
 mod paths;
 mod pick;
 mod refresh;
+mod resume;
 mod service;
 mod shell_init;
 mod status;
@@ -18,6 +19,7 @@ use std::ffi::OsString;
 use std::io::IsTerminal;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitCode};
+use std::time::SystemTime;
 
 use clap::{CommandFactory, Parser, Subcommand};
 
@@ -269,7 +271,7 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
 fn run_launch(
     name: Option<&str>,
     subcommand: Option<&str>,
-    args: Vec<OsString>,
+    mut args: Vec<OsString>,
 ) -> config::Result<ExitCode> {
     let parent = Env::from_process();
     let depth = launch::check_depth(&parent)?;
@@ -279,6 +281,7 @@ fn run_launch(
         std::io::stderr().is_terminal(),
         &args,
     );
+    let dry_run = parent.get("CCX_DRY_RUN") == Some("1".as_ref());
     let self_exe = std::env::current_exe().ok();
     let claude = launch::find_claude(
         config.launch.claude_bin.as_deref(),
@@ -297,8 +300,15 @@ fn run_launch(
             account
         }
         Pick::Auto => {
-            let (account, picked) = auto_select(&config, &parent, &args, claude.as_deref(), depth)?;
-            auto = picked;
+            let context = AutoContext {
+                config: &config,
+                env: &parent,
+                claude: claude.as_deref(),
+                depth,
+                dry_run,
+            };
+            let (account, picked) = auto_select(&context, &mut args)?;
+            auto = Some(picked);
             account
         }
     };
@@ -310,25 +320,27 @@ fn run_launch(
         for key in &removed {
             eprintln!("ccx: warning: removed {key}; it overrides the account login");
         }
-        if let Some(warning) = auto.as_ref().and_then(|a| a.warning.as_ref()) {
-            eprintln!("{warning}");
+        if let Some(auto) = &auto {
+            for line in &auto.notes {
+                eprintln!("{line}");
+            }
         }
         if config.launch.banner {
-            match &auto {
-                Some(auto) => eprintln!("{}", auto.banner),
+            match auto.as_ref().and_then(|a| a.banner.as_ref()) {
+                Some(banner) => eprintln!("{banner}"),
                 None => eprintln!("ccx: account {} ({})", account.name, account.dir.display()),
             }
         }
     }
 
-    if parent.get("CCX_DRY_RUN") == Some("1".as_ref()) {
+    if dry_run {
         let report = launch::dry_run_report(account, claude.as_deref(), &parent, &env, &args);
         print!("{report}");
         return Ok(ExitCode::SUCCESS);
     }
 
-    if let Some(auto) = &auto
-        && let Err(e) = pick::write_state(&auto.state_path, &auto.state)
+    if let Some((path, state)) = auto.as_ref().and_then(|a| a.state.as_ref())
+        && let Err(e) = pick::write_state(path, state)
         && show
     {
         eprintln!("ccx: warning: {e}");
@@ -366,51 +378,90 @@ fn run_launch(
     Ok(ExitCode::from(EXIT_EXEC_FAILED))
 }
 
+/// The inputs of an automatic pick.
+struct AutoContext<'a> {
+    config: &'a config::Config,
+    env: &'a Env,
+    claude: Option<&'a std::path::Path>,
+    depth: u32,
+    dry_run: bool,
+}
+
 /// The result of an automatic pick: the messages and the state to write.
+#[derive(Default)]
 struct Auto {
-    banner: String,
-    warning: Option<String>,
-    state_path: std::path::PathBuf,
-    state: pick::State,
+    /// The usage banner of the account. `None` gives the plain account line.
+    banner: Option<String>,
+    /// Warnings and the handoff banner. ccx shows them on a terminal, also
+    /// when `launch.banner` is false.
+    notes: Vec<String>,
+    /// The pick state to write, for a pick by usage.
+    state: Option<(std::path::PathBuf, pick::State)>,
+}
+
+/// The enabled accounts with their usage. When the usage data of an
+/// account is `usage.fresh_minutes` old or more, or missing, ccx first runs
+/// a blocking fetch for that account (#11).
+fn fresh_candidates(cx: &AutoContext, home: &std::ffi::OsStr) -> Vec<pick::Candidate> {
+    let config = cx.config;
+    let candidates = pick::candidates(config, home);
+    let Some(claude) = cx.claude.filter(|_| !refresh::disabled(cx.env)) else {
+        return candidates;
+    };
+    let now = usage::now_ms();
+    let stale: Vec<&config::Account> = candidates
+        .iter()
+        .filter(|c| {
+            c.usage.as_ref().is_none_or(|u| {
+                !refresh::is_fresh(u.fetched_at_ms, now, config.usage.fresh_minutes)
+            })
+        })
+        .filter_map(|c| config.account(&c.name))
+        .collect();
+    if stale.is_empty() {
+        return candidates;
+    }
+    refresh::blocking(config, &stale, claude, cx.env, home, cx.depth);
+    pick::candidates(config, home)
 }
 
 /// Automatic selection for a session with no account name. Only
 /// `Pick::Auto` comes here, so claude subcommands never use the picker.
 /// With no enabled account, ccx uses the base account.
 ///
-/// When the usage data of an account is `usage.fresh_minutes` old or more,
-/// or missing, ccx first runs a blocking fetch for that account (#11).
+/// For `-c` and `--resume <id>`, ccx first finds the owner of the session
+/// (#15). Then `args` can change to `--resume <id>` for a handoff.
 fn auto_select<'a>(
-    config: &'a config::Config,
-    env: &Env,
-    args: &[OsString],
-    claude: Option<&std::path::Path>,
-    depth: u32,
-) -> config::Result<(&'a config::Account, Option<Auto>)> {
-    let home = config::home(env)?;
-    let mut candidates = pick::candidates(config, home);
-    if let Some(claude) = claude
-        && !refresh::disabled(env)
-    {
-        let now = usage::now_ms();
-        let stale: Vec<&config::Account> = candidates
-            .iter()
-            .filter(|c| {
-                c.usage.as_ref().is_none_or(|u| {
-                    !refresh::is_fresh(u.fetched_at_ms, now, config.usage.fresh_minutes)
-                })
-            })
-            .filter_map(|c| config.account(&c.name))
-            .collect();
-        if !stale.is_empty() {
-            refresh::blocking(config, &stale, claude, env, home, depth);
-            candidates = pick::candidates(config, home);
-        }
-    }
+    cx: &AutoContext<'a>,
+    args: &mut Vec<OsString>,
+) -> config::Result<(&'a config::Account, Auto)> {
+    let config = cx.config;
+    let home = config::home(cx.env)?;
+    let owner = resume::intent(args).and_then(|intent| {
+        let enc = match intent.kind {
+            resume::Kind::Continue => handoff::physical_cwd()
+                .ok()
+                .map(|cwd| handoff::encode_cwd(&cwd)),
+            resume::Kind::Resume(_) => None,
+        };
+        resume::owner(config, &intent.kind, enc.as_deref()).map(|thread| (intent, thread))
+    });
+    let candidates = fresh_candidates(cx, home);
     let now = usage::now_ms();
     let state_path = pick::state_path(home);
     let last = pick::read_state(&state_path).last;
     let model = pick::model_arg(args);
+    if let Some((intent, thread)) = owner {
+        return auto_resume(
+            cx,
+            home,
+            &candidates,
+            &intent,
+            &thread,
+            args,
+            last.as_deref(),
+        );
+    }
     let Some(decision) = pick::pick(
         &candidates,
         last.as_deref(),
@@ -418,31 +469,111 @@ fn auto_select<'a>(
         &config.pick,
         now,
     ) else {
-        return Ok((config.base(), None));
+        return Ok((config.base(), Auto::default()));
     };
     let chosen = &candidates[decision.index];
     let account = config
         .account(&chosen.name)
         .expect("each candidate is a configured account");
-    let warning = match decision.reason {
-        pick::Reason::AllLimited { frees_at_ms } => Some(pick::all_limited_warning(
+    let mut auto = Auto {
+        banner: Some(pick::banner(chosen, now, pick::local_clock)),
+        state: Some((state_path, chosen_state(&chosen.name, now))),
+        ..Auto::default()
+    };
+    if let pick::Reason::AllLimited { frees_at_ms } = decision.reason {
+        auto.notes.push(pick::all_limited_warning(
             &chosen.name,
             frees_at_ms,
             now,
             pick::local_clock,
-        )),
-        _ => None,
+        ));
+    }
+    Ok((account, auto))
+}
+
+fn chosen_state(name: &str, now: u64) -> pick::State {
+    pick::State {
+        last: Some(name.to_string()),
+        picked_at_ms: Some(now),
+    }
+}
+
+/// `-c` or `--resume <id>` for a session that `thread.account` owns:
+/// launch the owner, or hand off to the account that automatic selection
+/// picks when the owner is limited (#15).
+fn auto_resume<'a>(
+    cx: &AutoContext<'a>,
+    home: &std::ffi::OsStr,
+    candidates: &[pick::Candidate],
+    intent: &resume::Intent,
+    thread: &handoff::Thread,
+    args: &mut Vec<OsString>,
+    last: Option<&str>,
+) -> config::Result<(&'a config::Account, Auto)> {
+    let config = cx.config;
+    let owner = config
+        .account(&thread.account)
+        .expect("each thread is in a configured account");
+    let owner_candidate = candidates
+        .iter()
+        .find(|c| c.name == owner.name)
+        .cloned()
+        .unwrap_or_else(|| pick::candidate(owner, home));
+    let now = usage::now_ms();
+    let model = pick::model_arg(args);
+    let mut auto = Auto {
+        banner: Some(pick::banner(&owner_candidate, now, pick::local_clock)),
+        ..Auto::default()
     };
-    let auto = Auto {
-        banner: pick::banner(chosen, now, pick::local_clock),
-        warning,
-        state_path,
-        state: pick::State {
-            last: Some(chosen.name.clone()),
-            picked_at_ms: Some(now),
-        },
+    let route = resume::route(
+        candidates,
+        &owner_candidate,
+        last,
+        model.as_deref(),
+        &config.pick,
+        now,
+    );
+    let (index, reason) = match route {
+        resume::Route::Owner => return Ok((owner, auto)),
+        resume::Route::AllLimited => {
+            auto.notes.push(resume::all_limited_warning(&owner.name));
+            return Ok((owner, auto));
+        }
+        resume::Route::Handoff { index, reason } => (index, reason),
     };
-    Ok((account, Some(auto)))
+    let chosen = &candidates[index];
+    let target = config
+        .account(&chosen.name)
+        .expect("each candidate is a configured account");
+    // A dry run copies nothing. It shows the launch for a new copy.
+    let done = if cx.dry_run {
+        Ok((thread.id.clone(), false))
+    } else {
+        let mut warnings = Vec::new();
+        let done = handoff::handoff(home, owner, target, thread, SystemTime::now(), &mut |w| {
+            warnings.push(format!("ccx: warning: {w}"))
+        });
+        auto.notes.extend(warnings);
+        done.map(|d| (d.id, d.plan == handoff::Plan::Fork))
+    };
+    match done {
+        Ok((id, fork)) => {
+            let fork = fork.then_some(id.as_str());
+            auto.notes
+                .push(resume::banner(&owner.name, &target.name, &reason, fork));
+            auto.banner = Some(pick::banner(chosen, now, pick::local_clock));
+            auto.state = Some((pick::state_path(home), chosen_state(&chosen.name, now)));
+            *args = resume::target_args(args, intent, &id);
+            Ok((target, auto))
+        }
+        Err(e) => {
+            auto.notes.push(format!(
+                "ccx: warning: cannot hand off to {}: {e}; the session stays in {}",
+                target.name, owner.name
+            ));
+            Ok((owner, auto))
+        }
+    }
 }
 
 #[cfg(test)]
