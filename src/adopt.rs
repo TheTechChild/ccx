@@ -105,10 +105,17 @@ pub fn choose(
         }
     }
     let mut chosen: Vec<Found> = Vec::new();
+    // The new accounts and their names. A dir in the config already keeps
+    // its config name, so it is not in the duplicate check.
+    let mut new: Vec<(&str, &String)> = Vec::new();
     let mut notes = Vec::new();
     for f in found {
         if choices.skip.contains(&f.name) {
             notes.push(format!("skip {}: you chose to skip it", f.dir_text));
+            continue;
+        }
+        if name_for_dir(main, &canonical(&f.dir_text, home.as_os_str()), home).is_some() {
+            chosen.push(f.clone());
             continue;
         }
         let name = choices.rename.get(&f.name).unwrap_or(&f.name);
@@ -120,12 +127,13 @@ pub fn choose(
         if choices.rename.contains_key(&f.name) && has_account(main, name) {
             return Err(format!("the name `{name}` is in the config already"));
         }
-        if let Some(other) = chosen.iter().find(|c| &c.name == name) {
+        if let Some((other, _)) = new.iter().find(|(_, n)| *n == name) {
             return Err(format!(
-                "{} and {} cannot both have the name `{name}`",
-                other.dir_text, f.dir_text
+                "{other} and {} cannot both have the name `{name}`",
+                f.dir_text
             ));
         }
+        new.push((&f.dir_text, name));
         chosen.push(Found {
             name: name.clone(),
             dir_text: f.dir_text.clone(),
@@ -855,6 +863,32 @@ mod tests {
         let (chosen, _) =
             choose(&all_found(), &main, home, &choices(&[("zeta", "z")], &[])).unwrap();
         assert!(chosen.contains(&found("z", "~/.claude-zeta")));
+    }
+
+    #[test]
+    fn choose_and_wizard_accept_the_old_name_of_a_renamed_dir() {
+        // An earlier adopt gave ~/.claude-angel2 the name `work`, so the
+        // name `angel2` is free for ~/.claude-x.
+        let main: DocumentMut = format!("{MAIN}[accounts.work]\ndir = \"~/.claude-angel2\"\n")
+            .parse()
+            .unwrap();
+        let home = Path::new("/home/test");
+        let all = [
+            found("main", "~/.claude"),
+            found("angel2", "~/.claude-angel2"),
+            found("x", "~/.claude-x"),
+        ];
+        let flags = Choices {
+            rename: [("x".to_string(), "angel2".to_string())].into(),
+            skip: Default::default(),
+        };
+        let (chosen, notes) = choose(&all, &main, home, &flags).unwrap();
+        assert!(chosen.contains(&found("angel2", "~/.claude-x")));
+        assert!(notes.is_empty());
+        let mut p = Script::new([Reply::Pick(1), Reply::Text("angel2")]);
+        let got = ask_choices(&mut p, &all, &main, home).unwrap();
+        assert_eq!(got, flags);
+        assert_eq!(choose(&all, &main, home, &got).unwrap(), (chosen, notes));
     }
 
     #[test]

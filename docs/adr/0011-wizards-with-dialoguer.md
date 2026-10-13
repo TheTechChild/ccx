@@ -29,6 +29,6 @@ The wizards use multi-step `dialoguer` prompts (decision D6). ccx does not add `
 
 ## Consequences
 
-- Esc cancels a `Confirm` or a `Select` step. A `dialoguer` `Input` step does not read Esc. Ctrl-C stops the process at each step. In all cases the wizard has not changed a file, because the changes come only after the last confirm.
+- Esc or Ctrl-C cancels a `Confirm` or a `Select` step. ccx shows "Cancelled. Nothing changed." and shows the cursor again. A `dialoguer` `Input` step does not read Esc. Ctrl-C at an `Input` step stops the process. In all cases the wizard has not changed a file, because the changes come only after the last confirm.
 - `manage add` with a login runs `claude auth login` after the confirm. The summary with the email and the tier comes after the login.
 - A full-screen TUI stays possible later behind the same `Prompt` trait.

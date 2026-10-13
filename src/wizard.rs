@@ -103,14 +103,18 @@ impl Ask<'_> {
 
 /// The [`Prompt`] on the terminal of the user, through `dialoguer`.
 ///
-/// Esc cancels a yes/no or a select step. A text step of `dialoguer` does
-/// not read Esc; Ctrl-C stops the process at each step. In both cases the
+/// Esc or Ctrl-C cancels a yes/no or a select step, and ccx shows
+/// "Cancelled. Nothing changed.". A text step of `dialoguer` does not read
+/// Esc, and Ctrl-C at a text step stops the process. In all cases the
 /// wizard has not changed a file.
 pub struct Terminal;
 
 fn stop(e: dialoguer::Error) -> Stop {
     let dialoguer::Error::IO(e) = e;
     if e.kind() == std::io::ErrorKind::Interrupted {
+        // `dialoguer` hides the cursor for a select step and does not show
+        // it again when Ctrl-C interrupts the read. Show it here.
+        let _ = dialoguer::console::Term::stderr().show_cursor();
         Stop::Cancel
     } else {
         Stop::Fail(format!("cannot read the answer: {e}"))
