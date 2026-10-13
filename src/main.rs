@@ -7,6 +7,7 @@ mod list;
 mod paths;
 mod pick;
 mod refresh;
+mod service;
 mod shell_init;
 mod status;
 mod sync;
@@ -118,6 +119,27 @@ enum Manage {
         #[arg(long)]
         json: bool,
     },
+    /// Install, remove or show the background usage refresh.
+    ///
+    /// The service runs `ccx usage refresh --all --background` every 300
+    /// seconds: launchd on macOS, a systemd user timer on Linux. With no
+    /// systemd, `install` prints a crontab line and changes no files.
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
+}
+
+/// `ccx manage service` commands.
+#[derive(Debug, Subcommand)]
+enum ServiceCommand {
+    /// Write the job for this system and load it.
+    Install,
+    /// Stop the job and remove its files.
+    Uninstall,
+    /// Show if the job is installed and loaded, the last refresh and the
+    /// age of each usage cache.
+    Status,
 }
 
 /// `ccx usage` commands.
@@ -186,6 +208,13 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
                     }
                 }
                 Manage::Doctor { json } => return Ok(ExitCode::from(doctor::run(&env, json)?)),
+                Manage::Service { command } => match command {
+                    ServiceCommand::Install => service::install(&env)?,
+                    ServiceCommand::Uninstall => service::uninstall(&env)?,
+                    ServiceCommand::Status => {
+                        return Ok(ExitCode::from(service::status(&env)?));
+                    }
+                },
             }
             return Ok(ExitCode::SUCCESS);
         }

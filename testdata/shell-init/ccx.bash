@@ -47,11 +47,23 @@ _ccx() {
             ccx__subcmd__manage,list)
                 cmd="ccx__subcmd__manage__subcmd__list"
                 ;;
+            ccx__subcmd__manage,service)
+                cmd="ccx__subcmd__manage__subcmd__service"
+                ;;
             ccx__subcmd__manage,shell-init)
                 cmd="ccx__subcmd__manage__subcmd__shell__subcmd__init"
                 ;;
             ccx__subcmd__manage,sync)
                 cmd="ccx__subcmd__manage__subcmd__sync"
+                ;;
+            ccx__subcmd__manage__subcmd__service,install)
+                cmd="ccx__subcmd__manage__subcmd__service__subcmd__install"
+                ;;
+            ccx__subcmd__manage__subcmd__service,status)
+                cmd="ccx__subcmd__manage__subcmd__service__subcmd__status"
+                ;;
+            ccx__subcmd__manage__subcmd__service,uninstall)
+                cmd="ccx__subcmd__manage__subcmd__service__subcmd__uninstall"
                 ;;
             ccx__subcmd__usage,refresh)
                 cmd="ccx__subcmd__usage__subcmd__refresh"
@@ -133,7 +145,7 @@ _ccx() {
             return 0
             ;;
         ccx__subcmd__manage)
-            opts="-h --help adopt list shell-init sync doctor"
+            opts="-h --help adopt list shell-init sync doctor service"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -177,6 +189,62 @@ _ccx() {
         ccx__subcmd__manage__subcmd__list)
             opts="-h --json --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        ccx__subcmd__manage__subcmd__service)
+            opts="-h --help install uninstall status"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        ccx__subcmd__manage__subcmd__service__subcmd__install)
+            opts="-h --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        ccx__subcmd__manage__subcmd__service__subcmd__status)
+            opts="-h --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        ccx__subcmd__manage__subcmd__service__subcmd__uninstall)
+            opts="-h --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

@@ -1,0 +1,1 @@
+*/5 * * * * PATH='/opt/claude/bin:/usr/bin:/bin:/usr/sbin:/sbin' CCX_CLAUDE_BIN='/opt/claude/bin/claude' '/home/test/.local/bin/ccx' usage refresh --all --background >/dev/null 2>&1
