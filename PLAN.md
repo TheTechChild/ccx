@@ -44,6 +44,7 @@ Follow-up issues: #21 (TUI wizards), #22 (adaptive refresh interval), #23 (direc
 - [ADR 0008](docs/adr/0008-sync-share-lists.md): the share list, the never-share list and the shared `plugins/synced` risk of `ccx manage sync`.
 - [ADR 0009](docs/adr/0009-handoff-fork-by-rewrite.md): `ccx handoff` makes a fork with a new session id itself. It does not use `--fork-session`.
 - [ADR 0010](docs/adr/0010-api-key-store.md): API-key accounts keep their keys through the OS commands `security` and `secret-tool`, not the `keyring` crate.
+- [ADR 0011](docs/adr/0011-wizards-with-dialoguer.md): the `ccx manage` wizards use multi-step `dialoguer` prompts (decision D6). ccx adds no TUI crate.
 
 ## Decisions from the grilling session
 
@@ -59,7 +60,7 @@ Follow-up issues: #21 (TUI wizards), #22 (adaptive refresh interval), #23 (direc
 - **Configuration:** `config.toml` has no email addresses. Email addresses go only in `~/.config/ccx/config.local.toml`, which ccx merges over `config.toml`.
 - **New machines:** `ccx manage bootstrap` sets up a new machine. On a machine with no browser, ccx shows the login URL that `claude` prints.
 - **API-key accounts:** these accounts are a paid fallback. The key is in the OS secret store. ccx asks before it uses a paid account, and refuses with no terminal unless you give `--allow-paid`.
-- **Prompts:** ccx uses flags and yes/no prompts. It shows banners and warnings only on a terminal.
+- **Prompts:** ccx uses flags and yes/no prompts. On a terminal, `manage add`, `edit` and `rm` with no NAME, and `manage adopt` with no `-y`, start a wizard (#21, ADR 0011). It shows banners and warnings only on a terminal.
 
 ## Workflow rules
 

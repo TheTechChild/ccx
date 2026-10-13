@@ -26,6 +26,7 @@ use crate::pick;
 use crate::prefs;
 use crate::status::{self, Auth};
 use crate::sync::{self, Class};
+use crate::wizard::{Ask, Prompt, Step, Stop};
 
 /// The mode of the new account dir.
 const DIR_MODE: u32 = 0o700;
@@ -37,7 +38,7 @@ const CONFIG_MODE: u32 = 0o644;
 const STATUS_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The arguments of `ccx manage add`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Args {
     pub name: String,
     /// The account dir. The default is `~/.claude-NAME`.
@@ -78,8 +79,12 @@ impl Info {
     }
 }
 
-/// Runs `ccx manage add`.
-pub fn run(parent: &Env, args: &Args) -> Result<()> {
+/// The usage line that names the flags of `ccx manage add`.
+pub const USAGE: &str =
+    "ccx manage add NAME [--dir DIR] [--email EMAIL] [--no-login] [--no-prefs] [--api-key] -y";
+
+/// Runs `ccx manage add`. `ask` gives the confirm before the first change.
+pub fn run(parent: &Env, args: &Args, ask: &mut Ask) -> Result<()> {
     if args.api_key {
         return crate::add_api_key::run(parent, args);
     }
@@ -129,7 +134,7 @@ pub fn run(parent: &Env, args: &Args) -> Result<()> {
         println!("  - {line}");
     }
     let retry = format!("ccx manage add {} -y", args.name);
-    if !adopt::confirm(args.yes, "Continue?", &retry)? {
+    if !ask.confirm("Continue?", &retry)? {
         println!("Nothing changed.");
         return Ok(());
     }
@@ -156,11 +161,17 @@ pub fn run(parent: &Env, args: &Args) -> Result<()> {
                 "The config did not change. To log in again, run `ccx manage add {}` again. To keep this login, run `ccx manage adopt`",
                 args.name
             );
-            if !terminal() {
+            if !ask.is_wizard() && !terminal() {
                 return Err(format!("{warning}. {again}"));
             }
             eprintln!("ccx: warning: {warning}");
-            if !adopt::confirm(false, "Write the account into the config?", "")? {
+            let question = "Write the account into the config?";
+            let write = match ask {
+                Ask::Wizard(_) => ask.confirm(question, "")?,
+                // `-y` confirms the plan, not a different login.
+                Ask::Flags { .. } => adopt::confirm(false, question, "")?,
+            };
+            if !write {
                 println!("{again}.");
                 return Ok(());
             }
@@ -184,6 +195,11 @@ pub fn run(parent: &Env, args: &Args) -> Result<()> {
         println!("Wrote {} (mode 0600)", written.display());
     }
 
+    println!(
+        "Summary: account {}, dir {dir_text}, email {}",
+        args.name,
+        email.as_deref().unwrap_or("-")
+    );
     match info {
         Some(info) => println!("{}", info.line(&args.name)),
         None => println!("No login. To log in, run `ccx @{} auth login`.", args.name),
@@ -192,6 +208,112 @@ pub fn run(parent: &Env, args: &Args) -> Result<()> {
         copy_prefs(parent, &config, &account, claude);
     }
     Ok(())
+}
+
+/// `ccx manage add` with no name on a terminal: the add wizard. The
+/// values in `given` (from the flags) are the defaults of the steps.
+pub fn run_wizard(parent: &Env, given: &Args, p: &mut dyn Prompt) -> Step<()> {
+    let home = config::home(parent)?;
+    let config = config::load(parent)?;
+    let cwd = std::env::current_dir().map_err(|e| format!("cannot read the cwd: {e}"))?;
+    let args = wizard(p, &config, home, &cwd, given)?;
+    run(parent, &args, &mut Ask::Wizard(p)).map_err(Stop::Fail)
+}
+
+/// The steps of the add wizard: name, config dir, sync, login. Returns the
+/// same [`Args`] that the flags give for these values. The summary and the
+/// confirm come after, in [`run`], before the first change.
+pub fn wizard(
+    p: &mut dyn Prompt,
+    config: &Config,
+    home: &OsStr,
+    cwd: &Path,
+    given: &Args,
+) -> Step<Args> {
+    p.show("ccx manage add: make a new account. Push Esc or Ctrl-C to stop. Nothing changes before the summary.");
+    let accounts: Vec<String> = config
+        .accounts
+        .iter()
+        .map(|a| format!("{} ({})", a.name, a.dir_text))
+        .collect();
+    p.show(&format!("Accounts now: {}", accounts.join(", ")));
+
+    let name = p.text("Step 1 of 4: the account name", None, &|name| {
+        let (dir, _) = account_dir(name, None, home, cwd);
+        check_new(config, name, &dir).or_else(|e| {
+            // A used default dir is not a problem yet: step 2 can change it.
+            if e.contains("already uses") {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })
+    })?;
+    let default_dir = format!("~/.claude-{name}");
+    let dir = p.text(
+        "Step 2 of 4: the config dir",
+        Some(given.dir.as_deref().unwrap_or(&default_dir)),
+        &|text| {
+            let (dir, _) = account_dir(&name, Some(text), home, cwd);
+            check_new(config, &name, &dir)?;
+            check_dir(&dir)
+        },
+    )?;
+    p.show(&format!(
+        "Step 3 of 4: sync. ccx links the shared setup of the base account into the new dir: {}",
+        shared_items(&config.base().dir)
+    ));
+    let mut args = Args {
+        name,
+        dir: (dir != default_dir).then_some(dir),
+        yes: false,
+        ..given.clone()
+    };
+    if args.api_key {
+        p.show("Step 4 of 4: API key. ccx asks for the key after the summary.");
+        return Ok(args);
+    }
+    let login = p.confirm(
+        "Step 4 of 4: log in now with `claude auth login`?",
+        !given.no_login,
+    )?;
+    args.no_login = !login;
+    let email = p.text(
+        "The expected email of the login (empty for none)",
+        given.email.as_deref(),
+        &|email| {
+            if email.is_empty() || crate::lifecycle::valid_email(email) {
+                Ok(())
+            } else {
+                Err(format!("`{email}` is not a valid email address"))
+            }
+        },
+    )?;
+    args.email = (!email.is_empty()).then_some(email);
+    if login {
+        let copy = p.confirm(
+            "Copy the user MCP servers and the preferences of the base account?",
+            !given.no_prefs,
+        )?;
+        args.no_prefs = !copy;
+    }
+    Ok(args)
+}
+
+/// The names of the base entries that sync links, or a note when there
+/// are none.
+fn shared_items(base: &Path) -> String {
+    let names: Vec<String> = sync::names(base)
+        .unwrap_or_default()
+        .iter()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| matches!(sync::classify(name), Class::Shared | Class::Skills))
+        .collect();
+    if names.is_empty() {
+        "no shared items now".to_string()
+    } else {
+        names.join(", ")
+    }
 }
 
 /// Copies the user MCP servers and the allowlisted preferences of the base
@@ -564,5 +686,257 @@ mod tests {
             ("-", None, 1.0)
         );
         assert_eq!(got.line("work"), "work: kind -, tier -, weight 1");
+    }
+
+    use crate::wizard::Stop;
+    use crate::wizard::fake::{Reply, Script};
+
+    fn ask(replies: Vec<Reply>, given: &Args) -> (Step<Args>, Script) {
+        let mut p = Script::new(replies);
+        let got = wizard(
+            &mut p,
+            &config(),
+            OsStr::new(HOME),
+            Path::new("/work"),
+            given,
+        );
+        (got, p)
+    }
+
+    #[test]
+    fn wizard_gives_the_same_args_and_plan_as_the_flags() {
+        let (got, p) = ask(
+            vec![
+                Reply::Text("Bad"),
+                Reply::Text("angel2"),
+                Reply::Text("work"),
+                Reply::Text(""),
+                Reply::Yes,
+                Reply::Text("not-an-email"),
+                Reply::Text("work@example.com"),
+                Reply::No,
+            ],
+            &Args::default(),
+        );
+        assert!(p.done());
+        let log = p.text_log();
+        assert!(
+            log.contains("Accounts now: angel2 (~/.claude-angel2), main (~/.claude)"),
+            "{log}"
+        );
+        assert!(
+            log.contains("error: `Bad` is not a valid account name"),
+            "{log}"
+        );
+        assert!(
+            log.contains("error: the account `angel2` already exists"),
+            "{log}"
+        );
+        assert!(
+            log.contains("error: `not-an-email` is not a valid email"),
+            "{log}"
+        );
+        assert!(log.contains("Step 3 of 4: sync"), "{log}");
+        // `ccx manage add work --email work@example.com --no-prefs`
+        let flags = Args {
+            name: "work".into(),
+            email: Some("work@example.com".into()),
+            no_prefs: true,
+            ..Args::default()
+        };
+        let got = got.unwrap();
+        assert_eq!(got, flags);
+        let dir = Path::new("/home/test/.claude-work");
+        assert_eq!(plan(&got, dir), plan(&flags, dir));
+    }
+
+    #[test]
+    fn wizard_with_a_dir_and_no_login() {
+        let (got, p) = ask(
+            vec![
+                Reply::Text("w2"),
+                Reply::Text("~/.claude-angel2"),
+                Reply::Text("~/accts/w2"),
+                Reply::No,
+                Reply::Text(""),
+            ],
+            &Args::default(),
+        );
+        assert!(p.done());
+        assert!(
+            p.text_log()
+                .contains("error: the account `angel2` already uses")
+        );
+        // `ccx manage add w2 --dir ~/accts/w2 --no-login`
+        let flags = Args {
+            name: "w2".into(),
+            dir: Some("~/accts/w2".into()),
+            no_login: true,
+            ..Args::default()
+        };
+        assert_eq!(got.unwrap(), flags);
+    }
+
+    #[test]
+    fn wizard_uses_the_given_flags_as_defaults() {
+        let given = Args {
+            dir: Some("/opt/acct".into()),
+            email: Some("x@example.com".into()),
+            yes: true,
+            ..Args::default()
+        };
+        let (got, _) = ask(
+            vec![
+                Reply::Text("x"),
+                Reply::Text(""),
+                Reply::Yes,
+                Reply::Text(""),
+                Reply::Yes,
+            ],
+            &given,
+        );
+        let got = got.unwrap();
+        assert_eq!(got.dir.as_deref(), Some("/opt/acct"));
+        assert_eq!(got.email.as_deref(), Some("x@example.com"));
+        // The wizard always shows the summary and asks.
+        assert!(!got.yes);
+        // An API-key account has no login steps.
+        let given = Args {
+            api_key: true,
+            ..Args::default()
+        };
+        let (got, p) = ask(vec![Reply::Text("paid"), Reply::Text("")], &given);
+        assert!(p.done());
+        assert!(got.unwrap().api_key);
+    }
+
+    #[test]
+    fn esc_at_a_step_stops_the_wizard() {
+        let (got, _) = ask(vec![Reply::Text("work"), Reply::Esc], &Args::default());
+        assert_eq!(got, Err(Stop::Cancel));
+        let (got, _) = ask(
+            vec![Reply::Text("work"), Reply::Text(""), Reply::Esc],
+            &Args::default(),
+        );
+        assert_eq!(got, Err(Stop::Cancel));
+    }
+
+    /// A temp HOME with a base account, the config and the fake claude.
+    struct Home {
+        dir: tempfile::TempDir,
+    }
+
+    impl Home {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let base = dir.path().join(".claude");
+            fs::create_dir_all(base.join("skills/tdd")).unwrap();
+            fs::write(base.join("settings.json"), "{}\n").unwrap();
+            let config = dir.path().join(".config/ccx");
+            fs::create_dir_all(&config).unwrap();
+            fs::write(
+                config.join("config.toml"),
+                "[accounts.main]\ndir = \"~/.claude\"\n",
+            )
+            .unwrap();
+            Home { dir }
+        }
+
+        fn path(&self) -> &Path {
+            self.dir.path()
+        }
+
+        fn env(&self) -> Env {
+            let fakebin = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/fakebin");
+            [
+                ("HOME", self.path().as_os_str().to_owned()),
+                (
+                    "PATH",
+                    format!("{}:/usr/bin:/bin", fakebin.display()).into(),
+                ),
+                (
+                    "FAKE_CLAUDE_LOG",
+                    self.path().join("fake-claude.log").into_os_string(),
+                ),
+            ]
+            .into_iter()
+            .collect()
+        }
+
+        fn read(&self, path: &str) -> String {
+            fs::read_to_string(self.path().join(path)).unwrap_or_default()
+        }
+    }
+
+    /// End to end: the add wizard with the fake claude.
+    #[test]
+    fn add_wizard_end_to_end_with_the_fake_claude() {
+        let home = Home::new();
+        let mut p = Script::new([
+            Reply::Text("work"),
+            Reply::Text(""),
+            Reply::Yes,
+            Reply::Text("work@example.com"),
+            Reply::No,
+            // The summary: write the changes.
+            Reply::Yes,
+        ]);
+        run_wizard(&home.env(), &Args::default(), &mut p).unwrap();
+        assert!(p.done());
+        assert!(
+            p.text_log().contains("settings.json, skills"),
+            "{}",
+            p.text_log()
+        );
+        let dir = home.path().join(".claude-work");
+        assert!(dir.join("settings.json").is_symlink());
+        assert_eq!(
+            fs::read_to_string(dir.join(".fake-login")).unwrap(),
+            "work@example.com"
+        );
+        let config = home.read(".config/ccx/config.toml");
+        assert!(config.contains("[accounts.work]"), "{config}");
+        assert!(!config.contains("@"), "{config}");
+        let overlay = home.read(".config/ccx/config.local.toml");
+        assert!(
+            overlay.contains("email = \"work@example.com\""),
+            "{overlay}"
+        );
+        let log = home.read("fake-claude.log");
+        assert!(log.contains("\"login\""), "{log}");
+        assert!(!log.contains("\"mcp\""), "{log}");
+    }
+
+    /// Esc at the summary or at a step changes no file.
+    #[test]
+    fn add_wizard_cancel_changes_nothing() {
+        let home = Home::new();
+        let before = home.read(".config/ccx/config.toml");
+        for replies in [
+            vec![Reply::Text("work"), Reply::Esc],
+            vec![
+                Reply::Text("work"),
+                Reply::Text(""),
+                Reply::No,
+                Reply::Text(""),
+                Reply::Esc,
+            ],
+            vec![
+                Reply::Text("work"),
+                Reply::Text(""),
+                Reply::No,
+                Reply::Text(""),
+                Reply::No,
+            ],
+        ] {
+            let mut p = Script::new(replies);
+            let got = run_wizard(&home.env(), &Args::default(), &mut p);
+            assert!(matches!(got, Ok(()) | Err(Stop::Cancel)), "{got:?}");
+            assert!(p.done());
+            assert_eq!(home.read(".config/ccx/config.toml"), before);
+            assert!(!home.path().join(".config/ccx/config.local.toml").exists());
+            assert!(!home.path().join(".claude-work").exists());
+            assert_eq!(home.read("fake-claude.log"), "");
+        }
     }
 }

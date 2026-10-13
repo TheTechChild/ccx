@@ -160,6 +160,31 @@ fn mode(path: &Path) -> u32 {
     fs::metadata(path).unwrap().permissions().mode() & 0o777
 }
 
+// wizards: no terminal
+
+#[test]
+fn edit_and_rm_without_a_name_and_without_a_terminal_name_the_flags() {
+    let fx = Fixture::new();
+    for (args, usage) in [
+        (
+            &["manage", "edit"][..],
+            "`ccx manage edit NAME [--email EMAIL] [--weight N] [--enable | --disable]`",
+        ),
+        (
+            &["manage", "rm", "--purge", "-y"][..],
+            "`ccx manage rm NAME [--purge] -y`",
+        ),
+    ] {
+        let stderr = fails(fx.ccx(args));
+        assert!(stderr.contains("missing the account name NAME"), "{stderr}");
+        assert!(stderr.contains("no terminal for the wizard"), "{stderr}");
+        assert!(stderr.contains(usage), "{stderr}");
+    }
+    assert!(fx.calls().is_empty());
+    assert_eq!(fx.config(), CONFIG);
+    assert!(fx.dir("work").is_dir());
+}
+
 // login
 
 #[test]

@@ -204,6 +204,54 @@ fn adopt_without_a_terminal_or_yes_writes_nothing() {
 }
 
 #[test]
+fn adopt_flags_rename_and_skip_found_accounts() {
+    let fx = Fixture::new();
+    fs::create_dir(fx.home().join(".claude-zeta")).unwrap();
+    let stdout = ok(fx.ccx(&[
+        "manage",
+        "adopt",
+        "--rename",
+        "angel2=work",
+        "--skip",
+        "zeta",
+        "-y",
+    ]));
+    assert!(
+        stdout.contains("add account work = ~/.claude-angel2"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("skip ~/.claude-zeta: you chose to skip it"),
+        "{stdout}"
+    );
+    let config = fs::read_to_string(fx.config_dir().join("config.toml")).unwrap();
+    assert!(
+        config.contains("[accounts.work]\ndir = \"~/.claude-angel2\""),
+        "{config}"
+    );
+    assert!(
+        !config.contains("angel2]") && !config.contains("zeta"),
+        "{config}"
+    );
+}
+
+#[test]
+fn adopt_flags_refuse_a_name_that_adopt_did_not_find() {
+    let fx = Fixture::new();
+    let out = run(fx.ccx(&["manage", "adopt", "--skip", "nope", "-y"]));
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("found no account `nope`; it found: main, angel2"),
+        "{stderr}"
+    );
+    let out = run(fx.ccx(&["manage", "adopt", "--rename", "angel2", "-y"]));
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("must be OLD=NEW"));
+    assert!(!fx.config_dir().join("config.toml").exists());
+}
+
+#[test]
 fn adopt_writes_through_a_config_symlink_and_keeps_other_entries() {
     let fx = Fixture::new();
     let repo = fx.home().join("dotfiles");

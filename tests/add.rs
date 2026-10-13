@@ -269,6 +269,37 @@ fn add_without_a_terminal_and_without_yes_changes_nothing() {
 }
 
 #[test]
+fn add_without_a_name_and_without_a_terminal_names_the_flags() {
+    let fx = Fixture::new();
+    // No terminal: no wizard starts, also with `-y`.
+    for args in [
+        &["manage", "add"][..],
+        &["manage", "add", "-y", "--no-login"],
+    ] {
+        let stderr = fails(fx.ccx(args));
+        assert!(stderr.contains("missing the account name NAME"), "{stderr}");
+        assert!(stderr.contains("no terminal for the wizard"), "{stderr}");
+        assert!(
+            stderr.contains("`ccx manage add NAME [--dir DIR] [--email EMAIL] [--no-login] [--no-prefs] [--api-key] -y`"),
+            "{stderr}"
+        );
+    }
+    assert!(fx.calls().is_empty());
+    assert_eq!(fx.config(), CONFIG);
+}
+
+#[test]
+fn add_prints_a_summary_with_the_email_and_the_tier() {
+    let fx = Fixture::new();
+    let stdout = ok(fx.ccx(&["manage", "add", "work", "--email", "work@example.com", "-y"]));
+    assert!(
+        stdout.contains("Summary: account work, dir ~/.claude-work, email work@example.com"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("work: kind "), "{stdout}");
+}
+
+#[test]
 fn no_login_stops_after_sync() {
     let fx = Fixture::new();
     let stdout = ok(fx.ccx(&["manage", "add", "work", "--no-login", "-y"]));

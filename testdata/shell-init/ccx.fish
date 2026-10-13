@@ -48,8 +48,10 @@ complete -c ccx -n "__fish_ccx_using_subcommand manage; and not __fish_seen_subc
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and not __fish_seen_subcommand_from adopt add login logout edit edit-config rm bootstrap list shell-init sync doctor service" -f -a "sync" -d 'Link the shared setup of the base account into other accounts'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and not __fish_seen_subcommand_from adopt add login logout edit edit-config rm bootstrap list shell-init sync doctor service" -f -a "doctor" -d 'Check the setup and show the problems'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and not __fish_seen_subcommand_from adopt add login logout edit edit-config rm bootstrap list shell-init sync doctor service" -f -a "service" -d 'Install, remove or show the background usage refresh'
+complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from adopt" -l rename -d 'Adopt the found account OLD with the name NEW, for example `--rename angel2=work`. You can give it more than one time' -r
+complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from adopt" -l skip -d 'Do not adopt the found account NAME. You can give it more than one time' -r
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from adopt" -s y -l yes -d 'Confirm the changes without a prompt'
-complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from adopt" -s h -l help -d 'Print help'
+complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from adopt" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from add" -l dir -d 'The account dir. The default is `~/.claude-NAME`' -r
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from add" -l email -d 'The email to give to `claude auth login --email`' -r
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from add" -l key-command -d 'With `--api-key`: get the key from the stdout of this shell command at each paid launch. ccx keeps no copy of the key' -r
