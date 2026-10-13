@@ -79,6 +79,8 @@ pub struct Row {
     pub usage: Option<Snapshot>,
     /// Why the `/usage` fetch failed, if it ran and failed.
     pub error: Option<String>,
+    /// True for an API-key account (#20). It has no login and no usage.
+    pub paid: bool,
 }
 
 impl Row {
@@ -97,10 +99,11 @@ pub fn limited(usage: Option<&Snapshot>, pick: &Pick, now_ms: u64) -> bool {
 
 /// 0 when at least one enabled, logged-in account is not limited, 3 when
 /// all of them are limited, 4 when no enabled account is logged in.
+/// API-key accounts do not count: they are only a paid fallback.
 pub fn exit_code(rows: &[Row], pick: &Pick, now_ms: u64) -> u8 {
     let mut usable = rows
         .iter()
-        .filter(|r| r.enabled && r.logged_in() == Some(true))
+        .filter(|r| r.enabled && !r.paid && r.logged_in() == Some(true))
         .peekable();
     if usable.peek().is_none() {
         return EXIT_NO_LOGIN;
@@ -123,7 +126,7 @@ pub fn run(env: &Env, as_json: bool) -> Result<u8> {
     // a cache entry is old or missing. After the wait, `gather` reads the
     // cache again.
     let now = usage::now_ms();
-    let stale = config.accounts.iter().any(|a| {
+    let stale = config.accounts.iter().filter(|a| !a.is_paid()).any(|a| {
         usage::read_cache(&usage::cache_path(home, &a.name))
             .is_none_or(|s| !refresh::is_fresh(s.fetched_at_ms, now, config.usage.fresh_minutes))
     });
@@ -195,6 +198,21 @@ fn gather(
     timeout: Duration,
     fresh_ms: u64,
 ) -> Row {
+    if account.is_paid() {
+        // No `claude auth status` and no `/usage` fetch: an API-key
+        // account has no login and no usage windows.
+        return Row {
+            name: account.name.clone(),
+            email: account.email.clone(),
+            base: account.is_base,
+            enabled: account.enabled,
+            auth: None,
+            tier: None,
+            usage: None,
+            error: None,
+            paid: true,
+        };
+    }
     let auth = claude.and_then(|claude| auth_status(claude, env, home, timeout));
     let tier = std::fs::read_to_string(usage::claude_json_path(account, home))
         .ok()
@@ -224,6 +242,7 @@ fn gather(
         tier,
         usage: snapshot.or_else(|| usage::fallback(account, home)),
         error,
+        paid: false,
     }
 }
 
@@ -266,13 +285,26 @@ pub fn refresh(env: &Env, name: Option<&str>, background: bool) -> Result<bool> 
     let home = config::home(env)?;
     let depth = launch::check_depth(env)?;
     let accounts: Vec<&Account> = match name {
-        Some(name) => vec![config.account(name).ok_or_else(|| {
-            format!(
-                "unknown account `{name}`; known accounts: {}",
-                config.names().join(", ")
-            )
-        })?],
-        None => config.accounts.iter().filter(|a| a.enabled).collect(),
+        Some(name) => {
+            let account = config.account(name).ok_or_else(|| {
+                format!(
+                    "unknown account `{name}`; known accounts: {}",
+                    config.names().join(", ")
+                )
+            })?;
+            if account.is_paid() {
+                return Err(format!(
+                    "account {name} is an API-key account; it has no usage to fetch"
+                ));
+            }
+            vec![account]
+        }
+        // API-key accounts have no usage windows.
+        None => config
+            .accounts
+            .iter()
+            .filter(|a| a.enabled && !a.is_paid())
+            .collect(),
     };
     let claude = find_claude(&config, env)
         .ok_or("cannot find claude; set launch.claude_bin or CCX_CLAUDE_BIN")?;
@@ -350,6 +382,9 @@ fn window(limit: &Limit, now_ms: u64) -> String {
 }
 
 fn kind_cell(row: &Row) -> String {
+    if row.paid {
+        return crate::paid::KIND_LABEL.into();
+    }
     row.auth.as_ref().map_or_else(|| "-".into(), kind_label)
 }
 
@@ -379,6 +414,8 @@ pub fn to_table(rows: &[Row], now_ms: u64) -> String {
         };
         let dash = || "-".to_string();
         let (session, weekly, scoped, source, age) = match &row.usage {
+            // An API-key account has no usage bars.
+            None if row.paid => (dash(), dash(), dash(), dash(), dash()),
             None => ("unknown".into(), "unknown".into(), dash(), dash(), dash()),
             Some(usage) => {
                 let cell = |kind| usage.get(kind).map_or_else(dash, |l| window(l, now_ms));
@@ -473,6 +510,7 @@ pub fn to_json(rows: &[Row], pick: &Pick, now_ms: u64, exit_code: u8) -> String 
                 "name": row.name,
                 "email": row.email,
                 "base": row.base,
+                "paid": row.paid,
                 "enabled": row.enabled,
                 "logged_in": auth.map(|a| a.logged_in),
                 "auth_method": auth.and_then(|a| a.method.clone()),
@@ -551,6 +589,7 @@ mod tests {
             tier: None,
             usage,
             error: None,
+            paid: false,
         }
     }
 
@@ -713,6 +752,14 @@ a     -      max   -     reset    reset   ExampleModel reset  cachedUsageUtiliza
         let mut off = row("a", Some(true), ok());
         off.enabled = false;
         assert_eq!(exit_code(&[off, row("b", Some(true), full())], &p, NOW), 3);
+        // An API-key account does not count.
+        let mut paid = row("paid", Some(true), None);
+        paid.paid = true;
+        assert_eq!(
+            exit_code(&[paid.clone(), row("b", Some(true), full())], &p, NOW),
+            3
+        );
+        assert_eq!(exit_code(&[paid], &p, NOW), 4);
     }
 
     fn rows() -> Vec<Row> {
@@ -733,7 +780,9 @@ a     -      max   -     reset    reset   ExampleModel reset  cachedUsageUtiliza
             }),
         );
         old.enabled = false;
-        vec![main, old, work]
+        let mut paid = row("paid", None, None);
+        paid.paid = true;
+        vec![main, old, paid, work]
     }
 
     #[test]
@@ -741,10 +790,11 @@ a     -      max   -     reset    reset   ExampleModel reset  cachedUsageUtiliza
         assert_eq!(
             to_table(&rows(), NOW),
             "\
-NAME       EMAIL             KIND        TIER             SESSION     WEEKLY   SCOPED                     SOURCE                  AGE
-main       main@example.com  max         Max 20x          9% (2h05m)  20.5%    ExampleModel 12.5% (2d4h)  /usage                  2m
-old (off)  -                 -           -                -           -        -                          cachedUsageUtilization  3h00m
-work       -                 logged out  future_tier_xyz  unknown     unknown  -                          -                       -
+NAME       EMAIL             KIND            TIER             SESSION     WEEKLY   SCOPED                     SOURCE                  AGE
+main       main@example.com  max             Max 20x          9% (2h05m)  20.5%    ExampleModel 12.5% (2d4h)  /usage                  2m
+old (off)  -                 -               -                -           -        -                          cachedUsageUtilization  3h00m
+paid       -                 api-key (paid)  -                -           -        -                          -                       -
+work       -                 logged out      future_tier_xyz  unknown     unknown  -                          -                       -
 "
         );
     }
@@ -759,6 +809,7 @@ work       -                 logged out  future_tier_xyz  unknown     unknown  -
             value["accounts"][0],
             json!({
                 "name": "main", "email": "main@example.com", "base": true, "enabled": true,
+                "paid": false,
                 "logged_in": true, "auth_method": "claude.ai", "subscription_type": "max",
                 "tier": "Max 20x", "tier_raw": "default_claude_max_20x",
                 "source": "/usage", "fetched_at_ms": NOW - 120_000, "age_secs": 120,
@@ -769,7 +820,11 @@ work       -                 logged out  future_tier_xyz  unknown     unknown  -
                 "limited": false, "error": null,
             })
         );
-        let work = &value["accounts"][2];
+        let paid = &value["accounts"][2];
+        assert_eq!(paid["paid"], true);
+        assert_eq!(paid["session"], Value::Null);
+        assert_eq!(paid["limited"], false);
+        let work = &value["accounts"][3];
         assert_eq!(work["source"], Value::Null);
         assert_eq!(work["session"], Value::Null);
         assert_eq!(work["tier"], "future_tier_xyz");

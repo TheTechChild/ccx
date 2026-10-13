@@ -27,6 +27,9 @@ pub struct Candidate {
     pub usage: Option<Snapshot>,
     /// The `model` key in the `settings.json` of the account.
     pub settings_model: Option<String>,
+    /// True for an API-key account (#20). The picker never selects it. It
+    /// is only a paid fallback when all subscription accounts are limited.
+    pub paid: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -203,7 +206,7 @@ pub fn pick<'a>(
     let mut open: Vec<(usize, f64)> = candidates
         .iter()
         .enumerate()
-        .filter(|(_, c)| !limited(c.usage.as_ref(), config, model(c), now_ms))
+        .filter(|(_, c)| !c.paid && !limited(c.usage.as_ref(), config, model(c), now_ms))
         .map(|(i, c)| (i, score(c, now_ms)))
         .collect();
 
@@ -211,6 +214,7 @@ pub fn pick<'a>(
         let (index, frees_at_ms) = candidates
             .iter()
             .enumerate()
+            .filter(|(_, c)| !c.paid)
             .map(|(i, c)| {
                 let usage = c.usage.as_ref().expect("a limited account has usage");
                 (i, frees_at(usage, config, model(c), now_ms))
@@ -253,8 +257,28 @@ pub fn pick<'a>(
     })
 }
 
+/// The paid fallback (#20): the first API-key candidate, only when all
+/// subscription accounts are limited. ccx must still ask the user before
+/// it uses it.
+pub fn paid_offer(candidates: &[Candidate], decision: Option<&Decision>) -> Option<usize> {
+    if !matches!(decision?.reason, Reason::AllLimited { .. }) {
+        return None;
+    }
+    candidates.iter().position(|c| c.paid)
+}
+
 /// The data that ccx reads for one account from its files.
 pub fn candidate(account: &Account, home: &OsStr) -> Candidate {
+    if account.is_paid() {
+        // An API-key account has no usage windows and no tier.
+        return Candidate {
+            name: account.name.clone(),
+            weight: account.weight.unwrap_or(1.0),
+            usage: None,
+            settings_model: None,
+            paid: true,
+        };
+    }
     let claude_json: Option<Value> = fs::read(usage::claude_json_path(account, home))
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok());
@@ -291,6 +315,7 @@ pub fn candidate(account: &Account, home: &OsStr) -> Candidate {
         weight,
         usage,
         settings_model,
+        paid: false,
     }
 }
 
@@ -402,6 +427,9 @@ pub fn all_limited_warning(
 /// The banner line, for example
 /// `ccx → angel2 · 5h 23% · wk 61% (resets Thu 09:00) · /usage 4m`.
 pub fn banner(candidate: &Candidate, now_ms: u64, clock: impl Fn(i64) -> Option<Clock>) -> String {
+    if candidate.paid {
+        return crate::paid::banner(&candidate.name);
+    }
     let mut parts = vec![format!("ccx → {}", candidate.name)];
     let Some(usage) = &candidate.usage else {
         parts.push("usage unknown".into());
@@ -505,6 +533,7 @@ mod tests {
                 limits,
             }),
             settings_model: None,
+            paid: false,
         }
     }
 
@@ -529,6 +558,70 @@ mod tests {
     fn pick_name(cands: &[Candidate], last: Option<&str>, model: Option<&str>) -> String {
         let decision = pick(cands, last, model, &cfg(), NOW).unwrap();
         cands[decision.index].name.clone()
+    }
+
+    fn paid(name: &str) -> Candidate {
+        Candidate {
+            paid: true,
+            // A high weight: the picker must skip it anyway.
+            ..unknown(name, 100.0)
+        }
+    }
+
+    // API-key accounts (#20).
+
+    #[test]
+    fn paid_accounts_are_never_picked_while_a_subscription_account_is_usable() {
+        let sets = [
+            vec![paid("paid"), used("a", 1.0, 89.0, 94.0)],
+            vec![
+                used("a", 1.0, 95.0, 10.0),
+                paid("paid"),
+                used("b", 1.0, 80.0, 10.0),
+            ],
+            // Unknown usage is never limited, so `a` is usable.
+            vec![paid("paid"), unknown("a", 1.0)],
+        ];
+        for cands in sets {
+            let decision = pick(&cands, Some("paid"), None, &cfg(), NOW).unwrap();
+            assert!(!cands[decision.index].paid, "{cands:?}");
+            assert!(!matches!(decision.reason, Reason::AllLimited { .. }));
+            assert_eq!(paid_offer(&cands, Some(&decision)), None, "{cands:?}");
+        }
+    }
+
+    #[test]
+    fn paid_accounts_are_offered_only_when_all_subscription_accounts_are_limited() {
+        let cands = vec![
+            used("a", 1.0, 95.0, 10.0),
+            paid("paid"),
+            paid("paid2"),
+            used("b", 1.0, 10.0, 96.0),
+        ];
+        let decision = pick(&cands, None, None, &cfg(), NOW).unwrap();
+        // The soonest-reset rule stays the fallback for a "no".
+        assert_eq!(cands[decision.index].name, "a");
+        assert!(matches!(decision.reason, Reason::AllLimited { .. }));
+        assert_eq!(paid_offer(&cands, Some(&decision)), Some(1));
+    }
+
+    #[test]
+    fn only_paid_accounts_give_no_pick_and_no_offer() {
+        let cands = vec![paid("paid")];
+        assert_eq!(pick(&cands, None, None, &cfg(), NOW), None);
+        assert_eq!(paid_offer(&cands, None), None);
+        // No paid account: nothing to offer.
+        let cands = vec![used("a", 1.0, 95.0, 10.0)];
+        let decision = pick(&cands, None, None, &cfg(), NOW).unwrap();
+        assert_eq!(paid_offer(&cands, Some(&decision)), None);
+    }
+
+    #[test]
+    fn paid_banner_shows_the_kind_and_no_usage() {
+        assert_eq!(
+            banner(&paid("paid"), NOW, utc),
+            "ccx → paid · api-key (paid)"
+        );
     }
 
     #[test]

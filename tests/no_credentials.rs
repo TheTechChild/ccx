@@ -23,6 +23,12 @@ const FORBIDDEN: [&str; 6] = [
 const CREDENTIALS_FILE: &str = ".credentials.json";
 const CREDENTIALS_ALLOWED_IN: [&str; 2] = ["sync.rs", "lifecycle.rs"];
 
+/// The store of the API keys that ccx keeps itself (#20). Only this file
+/// can read a keychain item, and only an item `ccx-<name>`
+/// (`keystore_reads_only_ccx_items`).
+const KEYSTORE_FILE: &str = "keystore.rs";
+const KEYSTORE_READ: &str = "find-generic-password";
+
 /// The problems in the non-test part of one source file.
 fn problems(file_name: &str, text: &str) -> Vec<String> {
     let code = text.split("#[cfg(test)]").next().unwrap_or("");
@@ -30,6 +36,9 @@ fn problems(file_name: &str, text: &str) -> Vec<String> {
     for (n, line) in code.lines().enumerate() {
         let where_ = format!("{file_name}:{}", n + 1);
         for pattern in FORBIDDEN {
+            if pattern == KEYSTORE_READ && file_name == KEYSTORE_FILE {
+                continue;
+            }
             if line.contains(pattern) {
                 out.push(format!("{where_}: contains `{pattern}`"));
             }
@@ -122,6 +131,39 @@ fn prefs_names_no_credential_store() {
     ] {
         assert!(!code.contains(pattern), "src/prefs.rs contains `{pattern}`");
     }
+}
+
+/// The key store (#20) touches only the secret-store items that ccx makes:
+/// each `OsStore` call checks that the service name is `ccx-<name>` before
+/// it runs a command. It never names a Claude Code item or file.
+#[test]
+fn keystore_reads_only_ccx_items() {
+    let text =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/keystore.rs")).unwrap();
+    let code = text.split("#[cfg(test)]").next().unwrap();
+    assert!(code.contains("pub const SERVICE_PREFIX: &str = \"ccx-\";"));
+    let os_store = code
+        .split("impl SecretStore for OsStore {")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}\n").next())
+        .expect("keystore.rs has `impl SecretStore for OsStore`");
+    assert_eq!(os_store.matches("fn ").count(), 3);
+    assert_eq!(os_store.matches("check_service(service)?;").count(), 3);
+    for pattern in [
+        "Claude Code",
+        "credentials",
+        "dump-keychain",
+        "\"-d\"",
+        "oauth",
+        ".key\"",
+    ] {
+        assert!(
+            !code.contains(pattern),
+            "src/keystore.rs contains `{pattern}`"
+        );
+    }
+    // Other files still cannot read a keychain item.
+    assert!(!problems("launch.rs", "\"find-generic-password\"").is_empty());
 }
 
 #[test]

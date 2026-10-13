@@ -48,9 +48,12 @@ complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcomma
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from adopt" -s h -l help -d 'Print help'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from add" -l dir -d 'The account dir. The default is `~/.claude-NAME`' -r
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from add" -l email -d 'The email to give to `claude auth login --email`' -r
+complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from add" -l key-command -d 'With `--api-key`: get the key from the stdout of this shell command at each paid launch. ccx keeps no copy of the key' -r
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from add" -l no-login -d 'Stop after sync. Do not log in'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from add" -l no-prefs -d 'Do not copy the user MCP servers and the preferences of the base account after the login'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from add" -s y -l yes -d 'Confirm the plan without a prompt'
+complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from add" -l api-key -d 'Make an API-key account: a paid fallback. Add reads the key with a hidden prompt, or one line of stdin, and keeps it in the OS secret store as `ccx-NAME`. There is no login'
+complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from add" -l key-file -d 'With `--api-key`: keep the key in `~/.config/ccx/keys/NAME` at mode 0600, not in the OS secret store'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from add" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from login" -l all -d 'Log in to each account that `claude auth status` shows as not logged in. Then show a summary for each account'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from login" -s h -l help -d 'Print help (see more with \'--help\')'

@@ -620,6 +620,7 @@ mod tests {
             email: None,
             own: Vec::new(),
             is_base,
+            api_key: None,
         }
     }
 

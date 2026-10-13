@@ -55,10 +55,13 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--dir=[The account dir. The default is \`~/.claude-NAME\`]:DIR:_default' \
 '--email=[The email to give to \`claude auth login --email\`]:EMAIL:_default' \
+'--key-command=[With \`--api-key\`\: get the key from the stdout of this shell command at each paid launch. ccx keeps no copy of the key]:COMMAND:_default' \
 '--no-login[Stop after sync. Do not log in]' \
 '--no-prefs[Do not copy the user MCP servers and the preferences of the base account after the login]' \
 '-y[Confirm the plan without a prompt]' \
 '--yes[Confirm the plan without a prompt]' \
+'(--email --no-login --no-prefs)--api-key[Make an API-key account\: a paid fallback. Add reads the key with a hidden prompt, or one line of stdin, and keeps it in the OS secret store as \`ccx-NAME\`. There is no login]' \
+'(--key-command)--key-file[With \`--api-key\`\: keep the key in \`~/.config/ccx/keys/NAME\` at mode 0600, not in the OS secret store]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 ':name -- The account name. It must match `^\[a-z0-9\]\[a-z0-9_-\]*$`:_default' \

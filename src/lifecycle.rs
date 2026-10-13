@@ -23,6 +23,7 @@ use crate::adopt;
 use crate::config::{self, Account, Config, Result};
 use crate::doctor;
 use crate::env::Env;
+use crate::keystore;
 use crate::launch;
 use crate::status;
 use crate::usage;
@@ -94,9 +95,10 @@ pub fn login(parent: &Env, name: Option<&str>) -> Result<bool> {
         return Ok(login_missing(parent)?.ok);
     };
     let setup = Setup::load(parent)?;
+    let account = setup.account(name)?;
+    no_login_for_api_key(account)?;
     let claude = setup.claude()?;
     let overlay = adopt::read_doc(&setup.overlay_path)?;
-    let account = setup.account(name)?;
     let line = login_one(&setup, &claude, account, adopt::email_of(&overlay, name))?;
     println!("{line}");
     Ok(true)
@@ -120,6 +122,10 @@ pub fn login_missing(parent: &Env) -> Result<Logins> {
     let mut summary = Vec::new();
     let mut logins = Logins { ok: true, done: 0 };
     for account in &setup.config.accounts {
+        if account.is_paid() {
+            summary.push(format!("{}: API-key account, no login", account.name));
+            continue;
+        }
         let env = setup.env(account)?;
         let text = status::auth_status_text(&claude, &env, setup.home, STATUS_TIMEOUT);
         if text
@@ -145,6 +151,17 @@ pub fn login_missing(parent: &Env) -> Result<Logins> {
         println!("  {line}");
     }
     Ok(logins)
+}
+
+/// An error for an API-key account (#20): it has no Claude Code login.
+fn no_login_for_api_key(account: &Account) -> Result<()> {
+    if account.is_paid() {
+        return Err(format!(
+            "account {} is an API-key account; it has no login. To store a different key, run `ccx manage rm {} --purge`, then `ccx manage add {} --api-key`",
+            account.name, account.name, account.name
+        ));
+    }
+    Ok(())
 }
 
 /// True when claude cannot open a browser for the login: in an SSH
@@ -220,6 +237,7 @@ pub fn check_email(name: &str, expected: &str, got: Option<&str>) -> Result<()> 
 pub fn logout(parent: &Env, name: &str, yes: bool) -> Result<()> {
     let setup = Setup::load(parent)?;
     let account = setup.account(name)?;
+    no_login_for_api_key(account)?;
     let claude = setup.claude()?;
     let retry = format!("ccx manage logout {name} -y");
     if !adopt::confirm(yes, &format!("Log out of account {name}?"), &retry)? {
@@ -450,7 +468,13 @@ pub fn rm(parent: &Env, name: &str, purge: bool, yes: bool) -> Result<()> {
             account.dir.display()
         ));
     }
-    let claude = if purge { Some(setup.claude()?) } else { None };
+    let paid = account.is_paid();
+    // An API-key account has no Claude Code login to log out of.
+    let claude = if purge && !paid {
+        Some(setup.claude()?)
+    } else {
+        None
+    };
     let mut main = adopt::read_doc(&setup.config_path)?;
     let mut overlay = adopt::read_doc(&setup.overlay_path)?;
     remove_account(&mut main, name);
@@ -465,7 +489,8 @@ pub fn rm(parent: &Env, name: &str, purge: bool, yes: bool) -> Result<()> {
 
     let trash = trash_dir(setup.home);
     println!("ccx manage rm will:");
-    for line in rm_plan(account, purge, &trash) {
+    let key_plan = keystore::delete_plan(account, parent)?.filter(|_| purge);
+    for line in rm_plan(account, purge, &trash).into_iter().chain(key_plan) {
         println!("  - {line}");
     }
     let retry = format!(
@@ -477,6 +502,13 @@ pub fn rm(parent: &Env, name: &str, purge: bool, yes: bool) -> Result<()> {
         return Ok(());
     }
 
+    if purge && paid {
+        // The key that ccx stores itself (#20). The user confirmed above.
+        match keystore::delete_key(account, parent, &keystore::OsStore) {
+            Ok(line) => println!("{line}"),
+            Err(e) => eprintln!("ccx: warning: cannot delete the API key: {e}"),
+        }
+    }
     if let Some(claude) = &claude {
         match run_claude(claude, &setup.env(account)?, &["auth", "logout"]) {
             Ok(()) => println!("Logged out of account {name}."),
@@ -485,6 +517,8 @@ pub fn rm(parent: &Env, name: &str, purge: bool, yes: bool) -> Result<()> {
         if delete_credentials(&account.dir)? {
             println!("Deleted the credentials file in {}", account.dir.display());
         }
+    }
+    if purge {
         match move_to_trash(&account.dir, name, &trash)? {
             Some(to) => println!("Moved {} to {}", account.dir.display(), to.display()),
             None => println!("{} does not exist", account.dir.display()),
@@ -500,6 +534,12 @@ pub fn rm(parent: &Env, name: &str, purge: bool, yes: bool) -> Result<()> {
     if !purge {
         println!("The directory {} did not change.", account.dir.display());
     }
+    if paid {
+        if let Some(command) = keystore::manual_delete(account, parent)?.filter(|_| !purge) {
+            println!("The API key of account {name} did not change. To delete it, run: {command}");
+        }
+        return Ok(());
+    }
     let service = doctor::service_name(&account.dir);
     println!(
         "On macOS, the login of the account can stay in the keychain item `{service}`. ccx does not remove it. To remove it, run: security delete-generic-password -s '{service}'"
@@ -512,11 +552,13 @@ pub fn rm_plan(account: &Account, purge: bool, trash: &Path) -> Vec<String> {
     let name = &account.name;
     let dir = account.dir.display();
     let mut lines = Vec::new();
-    if purge {
+    if purge && !account.is_paid() {
         lines.push(format!(
             "run `claude auth logout` with CLAUDE_CONFIG_DIR={dir}"
         ));
         lines.push(format!("delete {dir}/{CREDENTIALS_FILE} if it exists"));
+    }
+    if purge {
         lines.push(format!(
             "move {dir} into {} (mode 0700); ccx never deletes the directory",
             trash.display()
@@ -744,6 +786,7 @@ stickiness = 5
             email: None,
             own: Vec::new(),
             is_base: false,
+            api_key: None,
         };
         let trash = Path::new("/home/test/.local/state/ccx/trash");
         let text = rm_plan(&account, false, trash).join("\n");

@@ -70,23 +70,35 @@ pub enum Invocation {
     Own,
     /// Launch claude. `account` is the name after `@`, if there is one.
     /// `subcommand` is the claude subcommand in the first claude argument.
+    /// `allow_paid` is true for `--allow-paid` (#20).
     Launch {
         account: Option<String>,
         args: Vec<OsString>,
         subcommand: Option<&'static str>,
+        allow_paid: bool,
     },
 }
 
 impl Invocation {
-    fn launch(account: Option<String>, args: Vec<OsString>) -> Self {
+    fn launch(account: Option<String>, mut args: Vec<OsString>, mut allow_paid: bool) -> Self {
+        // `--allow-paid` can also come just after `@name`.
+        if account.is_some() && args.first().is_some_and(|a| a == ALLOW_PAID) {
+            args.remove(0);
+            allow_paid = true;
+        }
         let subcommand = claude_subcommand(&args);
         Invocation::Launch {
             account,
             args,
             subcommand,
+            allow_paid,
         }
     }
 }
+
+/// The ccx flag that lets ccx use a paid API-key account with no prompt.
+/// It must come before the claude arguments.
+pub const ALLOW_PAID: &str = "--allow-paid";
 
 /// The claude subcommand when it is the first claude argument.
 pub fn claude_subcommand(args: &[OsString]) -> Option<&'static str> {
@@ -96,14 +108,23 @@ pub fn claude_subcommand(args: &[OsString]) -> Option<&'static str> {
 
 /// Splits the command line (without the program name).
 pub fn parse_args(mut args: Vec<OsString>) -> Result<Invocation> {
+    let allow_paid = args.first().is_some_and(|a| a == ALLOW_PAID);
+    if allow_paid {
+        args.remove(0);
+    }
     let Some(first) = args.first().and_then(|a| a.to_str()) else {
-        return Ok(Invocation::launch(None, args));
+        return Ok(Invocation::launch(None, args, allow_paid));
     };
     if first == "--" {
         args.remove(0);
-        return Ok(Invocation::launch(None, args));
+        return Ok(Invocation::launch(None, args, allow_paid));
     }
     if RESERVED.contains(&first) || (args.len() == 1 && matches!(first, "--version" | "-V")) {
+        if allow_paid {
+            return Err(format!(
+                "{ALLOW_PAID} is only for a launch, not for `ccx {first}`"
+            ));
+        }
         return Ok(Invocation::Own);
     }
     if let Some(name) = first.strip_prefix('@') {
@@ -112,9 +133,9 @@ pub fn parse_args(mut args: Vec<OsString>) -> Result<Invocation> {
         }
         let account = Some(name.to_string());
         args.remove(0);
-        return Ok(Invocation::launch(account, args));
+        return Ok(Invocation::launch(account, args, allow_paid));
     }
-    Ok(Invocation::launch(None, args))
+    Ok(Invocation::launch(None, args, allow_paid))
 }
 
 /// How ccx gets the account for a launch.
@@ -260,7 +281,8 @@ pub fn dry_run_report(
 
 /// Lines for each changed variable: `- NAME` (removed), `+ NAME=value`
 /// (added) or `~ NAME=value` (changed). Removed values are not shown,
-/// because they can be secrets.
+/// because they can be secrets. The value of a login variable (for
+/// example the API key of a paid launch) shows as `<hidden>`.
 fn env_diff(before: &Env, after: &Env) -> Vec<String> {
     let mut lines = Vec::new();
     for (key, _) in before.iter() {
@@ -275,11 +297,13 @@ fn env_diff(before: &Env, after: &Env) -> Vec<String> {
             Some(old) if *old != value => '~',
             Some(_) => continue,
         };
-        lines.push(format!(
-            "{mark} {}={}",
-            key.to_string_lossy(),
+        let key = key.to_string_lossy();
+        let value = if STRIPPED.contains(&key.as_ref()) {
+            "<hidden>".into()
+        } else {
             value.to_string_lossy()
-        ));
+        };
+        lines.push(format!("{mark} {key}={value}"));
     }
     lines.sort_by(|a, b| a[2..].cmp(&b[2..]));
     lines
@@ -309,6 +333,16 @@ mod tests {
             account: account.map(String::from),
             args: os(args),
             subcommand: None,
+            allow_paid: false,
+        }
+    }
+
+    fn paid(account: Option<&str>, args: &[&str]) -> Invocation {
+        Invocation::Launch {
+            account: account.map(String::from),
+            args: os(args),
+            subcommand: None,
+            allow_paid: true,
         }
     }
 
@@ -317,7 +351,35 @@ mod tests {
             account: account.map(String::from),
             args: os(args),
             subcommand: Some(word),
+            allow_paid: false,
         }
+    }
+
+    #[test]
+    fn allow_paid_comes_before_or_just_after_the_name() {
+        let cases: [(&[&str], Invocation); 6] = [
+            (&["--allow-paid"], paid(None, &[])),
+            (&["--allow-paid", "-c"], paid(None, &["-c"])),
+            (
+                &["--allow-paid", "@paid", "-p", "x"],
+                paid(Some("paid"), &["-p", "x"]),
+            ),
+            (
+                &["@paid", "--allow-paid", "-c"],
+                paid(Some("paid"), &["-c"]),
+            ),
+            (&["--allow-paid", "--", "-c"], paid(None, &["-c"])),
+            // Later, it is a claude argument.
+            (
+                &["-p", "--allow-paid"],
+                launch(None, &["-p", "--allow-paid"]),
+            ),
+        ];
+        for (args, want) in cases {
+            assert_eq!(parse_args(os(args)).unwrap(), want, "{args:?}");
+        }
+        let err = parse_args(os(&["--allow-paid", "status"])).unwrap_err();
+        assert!(err.contains("only for a launch"), "{err}");
     }
 
     #[test]
@@ -599,5 +661,17 @@ argv: [\"--model\", \"opus\"]
 ";
         assert_eq!(report, want);
         assert!(!report.contains("secret-value"));
+    }
+
+    #[test]
+    fn dry_run_report_hides_the_key_of_a_paid_launch() {
+        let config = config();
+        let parent = Env::default();
+        let account = config.account("angel2").unwrap();
+        let (mut env, _) = build_env(&parent, account, 0);
+        env.set("ANTHROPIC_API_KEY", "sk-test-secret");
+        let report = dry_run_report(account, None, &parent, &env, &[]);
+        assert!(report.contains("+ ANTHROPIC_API_KEY=<hidden>"), "{report}");
+        assert!(!report.contains("sk-test-secret"), "{report}");
     }
 }
