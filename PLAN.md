@@ -30,7 +30,7 @@ Do the issues in this order. The GitHub issue is the specification for each step
 | 19 | #19 | `ccx manage bootstrap` |
 | 20 | #20 | API-key accounts as paid fallback |
 
-Follow-up issues: #21 (TUI wizards), #22 (adaptive refresh interval), #23 (direct usage API, policy review), #24 (monthly spend report).
+Follow-up issues: #21 (TUI wizards), #22 (adaptive refresh interval), #23 (direct usage API, policy review: no-go, ADR 0012), #24 (monthly spend report).
 
 ## Architecture decisions
 
@@ -45,6 +45,7 @@ Follow-up issues: #21 (TUI wizards), #22 (adaptive refresh interval), #23 (direc
 - [ADR 0009](docs/adr/0009-handoff-fork-by-rewrite.md): `ccx handoff` makes a fork with a new session id itself. It does not use `--fork-session`.
 - [ADR 0010](docs/adr/0010-api-key-store.md): API-key accounts keep their keys through the OS commands `security` and `secret-tool`, not the `keyring` crate.
 - [ADR 0011](docs/adr/0011-wizards-with-dialoguer.md): the `ccx manage` wizards use multi-step `dialoguer` prompts (decision D6). ccx adds no TUI crate.
+- [ADR 0012](docs/adr/0012-no-direct-usage-api.md): ccx does not call `/api/oauth/usage` directly (decision D6). That call needs the OAuth token, and ccx never reads credentials (ADR 0002).
 
 ## Decisions from the grilling session
 
