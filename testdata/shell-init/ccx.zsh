@@ -65,6 +65,16 @@ _arguments "${_arguments_options[@]}" : \
 ':shell -- The shell:(zsh bash fish)' \
 && ret=0
 ;;
+(sync)
+_arguments "${_arguments_options[@]}" : \
+'()--all[Sync all accounts other than the base account]' \
+'--dry-run[Show the plan and change nothing]' \
+'--force[Move CONFLICT items to the backup without a prompt]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::name -- The account to sync:_default' \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -146,6 +156,7 @@ _ccx__subcmd__manage_commands() {
 'adopt:Find the accounts on this machine and write them into the config' \
 'list:Show each configured account' \
 'shell-init:Print shell code for the profile\: completions and account aliases' \
+'sync:Link the shared setup of the base account into other accounts' \
     )
     _describe -t commands 'ccx manage commands' commands "$@"
 }
@@ -163,6 +174,11 @@ _ccx__subcmd__manage__subcmd__list_commands() {
 _ccx__subcmd__manage__subcmd__shell-init_commands() {
     local commands; commands=()
     _describe -t commands 'ccx manage shell-init commands' commands "$@"
+}
+(( $+functions[_ccx__subcmd__manage__subcmd__sync_commands] )) ||
+_ccx__subcmd__manage__subcmd__sync_commands() {
+    local commands; commands=()
+    _describe -t commands 'ccx manage sync commands' commands "$@"
 }
 (( $+functions[_ccx__subcmd__status_commands] )) ||
 _ccx__subcmd__status_commands() {

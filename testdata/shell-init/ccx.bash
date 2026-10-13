@@ -47,6 +47,9 @@ _ccx() {
             ccx__subcmd__manage,shell-init)
                 cmd="ccx__subcmd__manage__subcmd__shell__subcmd__init"
                 ;;
+            ccx__subcmd__manage,sync)
+                cmd="ccx__subcmd__manage__subcmd__sync"
+                ;;
             *)
                 ;;
         esac
@@ -124,7 +127,7 @@ _ccx() {
             return 0
             ;;
         ccx__subcmd__manage)
-            opts="-h --help adopt list shell-init"
+            opts="-h --help adopt list shell-init sync"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -167,6 +170,20 @@ _ccx() {
             ;;
         ccx__subcmd__manage__subcmd__shell__subcmd__init)
             opts="-h --help zsh bash fish"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        ccx__subcmd__manage__subcmd__sync)
+            opts="-h --all --dry-run --force --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

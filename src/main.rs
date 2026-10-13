@@ -5,6 +5,7 @@ mod launch;
 mod list;
 mod paths;
 mod shell_init;
+mod sync;
 
 use std::ffi::OsString;
 use std::io::IsTerminal;
@@ -71,6 +72,25 @@ enum Manage {
         #[arg(value_enum)]
         shell: shell_init::Shell,
     },
+    /// Link the shared setup of the base account into other accounts.
+    ///
+    /// Sync shows a plan: LINK, OK, RELINK, CONFLICT, SKIP and MKDIR. It
+    /// moves a CONFLICT item to `<dir>/.ccx-backup/<timestamp>/` only with
+    /// `--force` or after you confirm. It never changes the base account.
+    Sync {
+        /// The account to sync.
+        #[arg(required_unless_present = "all")]
+        name: Option<String>,
+        /// Sync all accounts other than the base account.
+        #[arg(long, conflicts_with = "name")]
+        all: bool,
+        /// Show the plan and change nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Move CONFLICT items to the backup without a prompt.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Debug, clap::Args)]
@@ -110,6 +130,16 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
                 Manage::Adopt { yes } => adopt::run(&env, yes)?,
                 Manage::List { json } => list::run(&env, json)?,
                 Manage::ShellInit { shell } => shell_init::run(&env, shell, Cli::command())?,
+                Manage::Sync {
+                    name,
+                    all: _,
+                    dry_run,
+                    force,
+                } => {
+                    if !sync::run(&env, name.as_deref(), dry_run, force)? {
+                        return Ok(ExitCode::FAILURE);
+                    }
+                }
             }
             return Ok(ExitCode::SUCCESS);
         }
@@ -163,6 +193,15 @@ fn run_launch(
         let report = launch::dry_run_report(account, claude.as_deref(), &parent, &env, &args);
         print!("{report}");
         return Ok(ExitCode::SUCCESS);
+    }
+
+    // Add missing links, for example a new skill. Never change a conflict.
+    match sync::health_check(config.base(), account) {
+        Ok(0) => {}
+        Ok(n) if tty => eprintln!("ccx: sync added {n} missing links in {}", account.name),
+        Ok(_) => {}
+        Err(e) if tty => eprintln!("ccx: warning: sync check: {e}"),
+        Err(_) => {}
     }
 
     let Some(claude) = claude else {

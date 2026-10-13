@@ -41,6 +41,7 @@ Follow-up issues: #21 (TUI wizards), #22 (adaptive refresh interval), #23 (direc
 - [ADR 0005](docs/adr/0005-m0-usage-hooks-off.md): M0 test 1. Hooks stay off for the `/usage` fetch.
 - [ADR 0006](docs/adr/0006-m0-session-file-layout.md): M0 test 4. The session file layout and the cwd encoding rule.
 - [ADR 0007](docs/adr/0007-m0-manual-tests.md): M0 tests 2, 3, 5 and 6. All pass. The caveats change #13, #14 and #15.
+- [ADR 0008](docs/adr/0008-sync-share-lists.md): the share list, the never-share list and the shared `plugins/synced` risk of `ccx manage sync`.
 
 ## Decisions from the grilling session
 
