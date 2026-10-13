@@ -6,7 +6,9 @@ mod launch;
 mod list;
 mod paths;
 mod shell_init;
+mod status;
 mod sync;
+mod usage;
 
 use std::ffi::OsString;
 use std::io::IsTerminal;
@@ -40,10 +42,23 @@ enum Own {
         #[command(subcommand)]
         command: Manage,
     },
-    /// Show the usage of each account (not ready yet).
-    Status(Rest),
-    /// Fetch and show usage (not ready yet).
-    Usage(Rest),
+    /// Show the kind, tier and usage of each account.
+    ///
+    /// Status uses the usage cache when it is fresh. If not, it runs the
+    /// `/usage` fetch. If the fetch fails, it uses `cachedUsageUtilization`
+    /// from `.claude.json`. The exit code is 0 when at least one account is
+    /// usable, 3 when all accounts are limited and 4 when no account is
+    /// logged in.
+    Status {
+        /// Print stable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Fetch usage and write the usage cache.
+    Usage {
+        #[command(subcommand)]
+        command: UsageCommand,
+    },
     /// Move a session to a different account (not ready yet).
     Handoff(Rest),
 }
@@ -103,6 +118,20 @@ enum Manage {
     },
 }
 
+/// `ccx usage` commands.
+#[derive(Debug, Subcommand)]
+enum UsageCommand {
+    /// Run the `/usage` fetch and write `~/.local/state/ccx/usage/<name>.json`.
+    Refresh {
+        /// The account to refresh.
+        #[arg(required_unless_present = "all")]
+        name: Option<String>,
+        /// Refresh all enabled accounts.
+        #[arg(long, conflicts_with = "name")]
+        all: bool,
+    },
+}
+
 #[derive(Debug, clap::Args)]
 struct Rest {
     #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
@@ -154,8 +183,19 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
             }
             return Ok(ExitCode::SUCCESS);
         }
-        Own::Status(_) => "status",
-        Own::Usage(_) => "usage",
+        Own::Status { json } => {
+            return Ok(ExitCode::from(status::run(&Env::from_process(), json)?));
+        }
+        Own::Usage {
+            command: UsageCommand::Refresh { name, all: _ },
+        } => {
+            let ok = status::refresh(&Env::from_process(), name.as_deref())?;
+            return Ok(if ok {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            });
+        }
         Own::Handoff(_) => "handoff",
     };
     Err(format!("`ccx {word}` is not ready yet"))

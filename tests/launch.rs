@@ -199,9 +199,9 @@ fn double_dash_passes_all_arguments() {
 #[test]
 fn reserved_word_is_not_passed_to_claude() {
     let fx = Fixture::new();
-    let out = fx.ccx(&["status"]).output().unwrap();
+    let out = fx.ccx(&["handoff"]).output().unwrap();
     assert!(!out.status.success());
-    assert!(stderr(&out).contains("`ccx status` is not ready yet"));
+    assert!(stderr(&out).contains("`ccx handoff` is not ready yet"));
     assert!(out.stdout.is_empty());
 }
 
