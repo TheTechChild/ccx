@@ -30,6 +30,7 @@ pub fn to_json(config: &Config) -> String {
                 "email": account.email,
                 "aliases": account.aliases,
                 "base": account.is_base,
+                "kind": if account.is_paid() { "api_key" } else { "subscription" },
             })
         })
         .collect();
@@ -37,10 +38,10 @@ pub fn to_json(config: &Config) -> String {
         .expect("JSON values always serialize")
 }
 
-/// A table with the columns NAME, DIR, EMAIL and ALIASES. A dir in HOME
-/// starts with `~`. An empty value is `-`.
+/// A table with the columns NAME, DIR, EMAIL, ALIASES and KIND. A dir in
+/// HOME starts with `~`. An empty value is `-`.
 pub fn to_table(config: &Config, home: &OsStr) -> String {
-    let mut rows = vec![["NAME", "DIR", "EMAIL", "ALIASES"].map(String::from)];
+    let mut rows = vec![["NAME", "DIR", "EMAIL", "ALIASES", "KIND"].map(String::from)];
     for account in &config.accounts {
         let dir = crate::paths::tilde(&account.dir, home);
         let aliases = match account.aliases.join(", ") {
@@ -52,9 +53,10 @@ pub fn to_table(config: &Config, home: &OsStr) -> String {
             dir,
             account.email.clone().unwrap_or_else(|| "-".into()),
             aliases,
+            kind(account).into(),
         ]);
     }
-    let mut widths = [0; 4];
+    let mut widths = [0; 5];
     for row in &rows {
         for (width, cell) in widths.iter_mut().zip(row) {
             *width = (*width).max(cell.chars().count());
@@ -73,6 +75,15 @@ pub fn to_table(config: &Config, home: &OsStr) -> String {
     out
 }
 
+/// `subscription`, or `api-key (paid)` for an API-key account (#20).
+fn kind(account: &crate::config::Account) -> &'static str {
+    if account.is_paid() {
+        crate::paid::KIND_LABEL
+    } else {
+        "subscription"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,6 +99,10 @@ mod tests {
             aliases = ["claude2", "c2"]
             [accounts.other]
             dir = "/srv/claude"
+            [accounts.paid]
+            dir = "~/.claude-paid"
+            kind = "api_key"
+            key_store = "keyring"
         "#;
         let overlay = "[accounts.angel2]\nemail = \"work@example.com\"\n";
         parse(
@@ -109,10 +124,11 @@ mod tests {
         assert_eq!(
             to_table(&config(), OsStr::new("/home/test")),
             "\
-NAME    DIR               EMAIL             ALIASES
-angel2  ~/.claude-angel2  work@example.com  claude2, c2
-main    ~/.claude         -                 -
-other   /srv/claude       -                 -
+NAME    DIR               EMAIL             ALIASES      KIND
+angel2  ~/.claude-angel2  work@example.com  claude2, c2  subscription
+main    ~/.claude         -                 -            subscription
+other   /srv/claude       -                 -            subscription
+paid    ~/.claude-paid    -                 -            api-key (paid)
 "
         );
     }
@@ -124,9 +140,13 @@ other   /srv/claude       -                 -
             value,
             json!({"accounts": [
                 {"name": "angel2", "dir": "/home/test/.claude-angel2", "email": "work@example.com",
-                 "aliases": ["claude2", "c2"], "base": false},
-                {"name": "main", "dir": "/home/test/.claude", "email": null, "aliases": [], "base": true},
-                {"name": "other", "dir": "/srv/claude", "email": null, "aliases": [], "base": false},
+                 "aliases": ["claude2", "c2"], "base": false, "kind": "subscription"},
+                {"name": "main", "dir": "/home/test/.claude", "email": null, "aliases": [], "base": true,
+                 "kind": "subscription"},
+                {"name": "other", "dir": "/srv/claude", "email": null, "aliases": [], "base": false,
+                 "kind": "subscription"},
+                {"name": "paid", "dir": "/home/test/.claude-paid", "email": null, "aliases": [],
+                 "base": false, "kind": "api_key"},
             ]})
         );
         // Same input, same text.

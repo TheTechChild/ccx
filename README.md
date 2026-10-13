@@ -4,11 +4,13 @@ ccx is a command-line tool. It starts Claude Code on the account that has the mo
 
 ccx is for a person who has more than one Claude Code account, for example a personal Max account and a work account. Each account has its own configuration directory. ccx reads the usage of each account and starts `claude` on the account that has the most capacity available. You can also name the account.
 
-> **Status:** Version 0.1.0. `ccx @name`, automatic selection, `ccx status`, `ccx usage refresh`, `ccx manage adopt`, `ccx manage add`, `ccx manage bootstrap`, `ccx manage login`, `ccx manage logout`, `ccx manage edit`, `ccx manage edit-config`, `ccx manage rm`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync` (also `--prefs`), `ccx manage doctor`, `ccx manage service`, `ccx handoff` and the automatic handoff on `ccx -c` and `ccx --resume <id>` are available. Refer to [PLAN.md](PLAN.md) for the plan.
+> **Status:** Version 0.1.0. `ccx @name`, automatic selection, `ccx status`, `ccx usage refresh`, `ccx manage adopt`, `ccx manage add`, `ccx manage bootstrap`, `ccx manage login`, `ccx manage logout`, `ccx manage edit`, `ccx manage edit-config`, `ccx manage rm`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync` (also `--prefs`), `ccx manage doctor`, `ccx manage service`, `ccx handoff`, the automatic handoff on `ccx -c` and `ccx --resume <id>`, and API-key accounts as a paid fallback are available. Refer to [PLAN.md](PLAN.md) for the plan.
 
 ## Credential policy
 
-ccx never reads, stores or refreshes Claude Code credentials. ccx does not read `.credentials.json` or the keychain secrets. All logins go through `claude auth login`. ccx gets the usage data from the `claude` program. Refer to [ADR 0002](docs/adr/0002-no-credential-access.md).
+ccx never reads, stores or refreshes Claude Code credentials. ccx does not read `.credentials.json` or the keychain secrets of Claude Code. All logins go through `claude auth login`. ccx gets the usage data from the `claude` program. Refer to [ADR 0002](docs/adr/0002-no-credential-access.md).
+
+The only secrets that ccx reads are the keys of [API-key accounts](#api-key-accounts-paid-fallback). ccx stores these keys itself, as the OS secret store items `ccx-NAME` or in key files at mode 0600. Refer to [ADR 0010](docs/adr/0010-api-key-store.md).
 
 ## Install
 
@@ -58,8 +60,32 @@ When you do not give `@name` and `CCX_ACCOUNT` is not set, ccx selects an enable
 3. When the usage of an account is not known, ccx scores it as 50% used. Unknown usage never makes an account limited. On a tie, an account with known usage is first.
 4. ccx stays on the last account (from `~/.local/state/ccx/state.json`) when it is not limited and its score is within 10 points of the best score on a 0-100 scale.
 5. When all accounts are limited, ccx starts the account with the soonest reset and shows a warning, for example `all accounts limited; angel2 frees 14:05 (37m)`.
+6. Automatic selection never selects an [API-key account](#api-key-accounts-paid-fallback) while a subscription account is not limited. When all subscription accounts are limited, ccx asks before it uses a paid account.
 
 Before ccx starts `claude`, it shows one banner line on stderr, for example `ccx → angel2 · 5h 23% · wk 61% (resets Thu 09:00) · /usage 4m`. ccx does not show the banner or the warnings when stdout or stderr is not a terminal, or for `-p` runs. ccx writes the selected account to `state.json` at mode 0600.
+
+### API-key accounts (paid fallback)
+
+An API-key account uses an Anthropic API key, not a subscription login (`kind = "api_key"` in `config.toml`). Each request costs money. Thus, ccx uses it only as a paid fallback:
+
+```sh
+ccx                         # All subscription accounts are limited: ccx asks first.
+ccx --allow-paid            # Use the paid fallback with no prompt. Use this in scripts.
+ccx --allow-paid @paid -p hi
+ccx @paid --allow-paid -c   # --allow-paid can also come just after @name.
+```
+
+- When all subscription accounts are limited, ccx asks `All subscription accounts are limited. Use paid account NAME? [y/N]`. If you answer yes, ccx starts the paid account. If you answer no, ccx uses the soonest-reset rule (step 5 above).
+- When there is no terminal, ccx never uses a paid account unless you give `--allow-paid`. It uses the soonest-reset rule.
+- `ccx @name` on an API-key account also asks first. When there is no terminal and you do not give `--allow-paid`, ccx stops and does not start `claude`.
+- `--allow-paid` must be the first argument, or come just after `@name`. In a different position, ccx sends it to `claude`.
+- ccx sets `ANTHROPIC_API_KEY` only in the environment of the paid `claude` process. ccx removes `ANTHROPIC_API_KEY` from the environment of each subscription launch. The banner, the warnings and `CCX_DRY_RUN=1` never show the key. The dry run shows `ANTHROPIC_API_KEY=<hidden>`.
+- If ccx cannot get the key, it shows an error and does not start `claude`.
+- `ccx status` and `ccx manage list` show the kind `api-key (paid)` with no usage. ccx does not run the `/usage` fetch for an API-key account.
+- `ccx handoff <id> @paid` copies the session, then asks before it resumes on the paid account.
+- The base account `~/.claude` cannot be an API-key account.
+
+To add an API-key account, refer to [Add an API-key account](#add-an-api-key-account).
 
 ### Claude subcommands
 
@@ -201,6 +227,33 @@ Add keeps the other entries and the comments in the two files. It writes each fi
 
 If the login fails, the config does not change. Run `ccx manage add` again. Add accepts a directory that exists when it contains only Claude Code files. To add a directory that has a login already, use `ccx manage adopt`.
 
+### Add an API-key account
+
+```sh
+ccx manage add paid --api-key                          # Read the key with a hidden prompt. Keep it in the OS secret store.
+ccx manage add paid --api-key --key-command 'pass show anthropic'
+ccx manage add paid --api-key --key-file               # Keep the key in ~/.config/ccx/keys/paid (mode 0600).
+op read 'op://vault/anthropic/key' | ccx manage add paid --api-key -y   # Read the key from stdin.
+```
+
+`ccx manage add NAME --api-key` makes an [API-key account](#api-key-accounts-paid-fallback). It shows the plan and asks, as for a subscription account. Then it does these steps:
+
+1. It reads the key with a hidden prompt. When stdin is not a terminal, it reads one line of stdin.
+2. It stores the key in the OS secret store, as the item `ccx-NAME`. On macOS, the store is the login keychain (through `security`). On Linux, the store is the Secret Service (through `secret-tool` from libsecret). The key goes to these commands only on stdin.
+3. It makes the directory and runs sync, as for a subscription account. There is no login and no copy of the preferences.
+4. It writes the account to `config.toml` with `kind = "api_key"` and `key_store = "keyring"`. `config.toml` never gets the key.
+
+With `--key-command COMMAND`, ccx keeps no copy of the key. ccx runs the command with `sh -c` at each paid launch and reads the key from its stdout, for example from a password manager. Add runs the command one time to make sure that it gives a key. If the command fails or gives no output, ccx shows an error and does not start `claude`. The account entry gets `key_command = "COMMAND"`.
+
+On a server with no Secret Service (no D-Bus session, or no unlocked keyring), the OS secret store is not available. Then add shows the error and two fallbacks:
+
+1. `key_command`: run `ccx manage add NAME --api-key --key-command '<command>'`.
+2. A key file: on a terminal, add asks `Write the key to ~/.config/ccx/keys/NAME (mode 0600)?`. With no terminal, run `ccx manage add NAME --api-key --key-file`.
+
+ccx writes the key file only after you confirm. The file has mode 0600, in a directory with mode 0700. The account entry gets `key_store = "file"`. ccx refuses to read a key file that has a different mode. To fix the mode, run `chmod 600 ~/.config/ccx/keys/NAME`.
+
+`ccx manage rm NAME --purge` deletes the item `ccx-NAME` or the key file of an API-key account. Without `--purge`, rm keeps the key and shows the command that deletes it. `ccx manage login` and `logout` refuse an API-key account, and `ccx manage login --all` skips it.
+
 ### Log in and log out
 
 ```sh
@@ -253,7 +306,7 @@ Rm refuses the base account `~/.claude`.
 ### List the accounts
 
 ```sh
-ccx manage list          # Show a table: name, directory, email and aliases.
+ccx manage list          # Show a table: name, directory, email, aliases and kind.
 ccx manage list --json   # Show stable JSON for scripts.
 ```
 
@@ -398,7 +451,7 @@ main    -                 max   Max 20x  11% (2h48m)  21% (3d2h)  ExampleModel 1
 ```
 
 - `EMAIL` comes from `config.local.toml`. If there is no email, ccx shows `-`.
-- `KIND` is `subscriptionType` from `claude auth status`. `TIER` comes from `oauthAccount.organizationRateLimitTier` in the `.claude.json` of the account. If ccx does not know the tier, it shows the raw value.
+- `KIND` is `subscriptionType` from `claude auth status`. For an API-key account, it is `api-key (paid)`, and the usage columns show `-`. `TIER` comes from `oauthAccount.organizationRateLimitTier` in the `.claude.json` of the account. If ccx does not know the tier, it shows the raw value.
 - `SESSION`, `WEEKLY` and `SCOPED` show the percent used. The time in parentheses is the time until the window resets.
 - `reset` shows that the reset time of the window is in the past. The usage data is from the last window, so ccx does not know the current percent. In the JSON, `reset` is `true` and `percent` is `null`.
 - `SOURCE` is `/usage` or `cachedUsageUtilization`. `AGE` is the age of the usage data.
@@ -409,7 +462,7 @@ The exit code is:
 
 | Code | Meaning |
 |---|---|
-| 0 | At least one enabled account is logged in and not limited. |
+| 0 | At least one enabled account is logged in and not limited. API-key accounts do not count for codes 0, 3 and 4. |
 | 3 | All logged-in enabled accounts are limited: session usage is `pick.session_avoid` (default 90) or more, or weekly usage is `pick.weekly_avoid` (default 95) or more. |
 | 4 | No enabled account is logged in. |
 
@@ -495,6 +548,12 @@ aliases = ["claude2"]      # Optional. `ccx manage shell-init` makes `alias clau
 own = ["statusline.py"]    # Optional. Items that `ccx manage sync` does not link.
 weight = 5                 # Optional. Overrides the weight of the tier for automatic selection.
 
+[accounts.paid]            # Optional. An API-key account: a paid fallback.
+dir = "~/.claude-paid"
+kind = "api_key"           # "subscription" (the default) or "api_key".
+key_store = "keyring"      # "keyring" (the OS secret store item `ccx-paid`) or "file" (~/.config/ccx/keys/paid).
+# key_command = "pass show anthropic"  # Or: a command that prints the key. Use key_store or key_command, not both.
+
 [pick]                     # Optional. The limits for automatic selection.
 session_avoid = 90         # Session usage (%) that makes an account limited.
 weekly_avoid = 95          # Weekly usage (%) that makes an account limited.
@@ -533,7 +592,7 @@ Issue #3 has the full configuration schema.
 | `CCX_SERVICE_KIND` | Input, for tests. Select the service manager of `ccx manage service`: `launchd`, `systemd` or `cron`. |
 | `CCX_NO_REFRESH=1` | Input. An automatic launch does not fetch usage and does not start the background refresh. |
 
-ccx removes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` before it starts `claude`, because they override the account login. On a terminal, ccx shows one warning for each variable that it removes. When stdout or stderr is not a terminal, or for `-p` runs, ccx shows no banner and no warnings.
+ccx removes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` before it starts `claude`, because they override the account login. For a paid launch on an API-key account, ccx then sets `ANTHROPIC_API_KEY` to the key of that account. On a terminal, ccx shows one warning for each variable that it removes. When stdout or stderr is not a terminal, or for `-p` runs, ccx shows no banner and no warnings.
 
 If ccx cannot start `claude`, it exits with code 127.
 

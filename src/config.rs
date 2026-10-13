@@ -54,6 +54,30 @@ pub struct Account {
     pub own: Vec<String>,
     /// True for the one account whose dir is `~/.claude`.
     pub is_base: bool,
+    /// Where the key of an API-key account (`kind = "api_key"`) comes
+    /// from. `None` for a subscription account. An API-key account is a
+    /// paid fallback (#20).
+    pub api_key: Option<KeySource>,
+}
+
+impl Account {
+    /// True for an API-key account. ccx uses it only as a paid fallback.
+    pub fn is_paid(&self) -> bool {
+        self.api_key.is_some()
+    }
+}
+
+/// Where ccx gets the key of an API-key account. The config never holds
+/// the key itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeySource {
+    /// The OS secret store, item `ccx-<name>` (`key_store = "keyring"`).
+    Keyring,
+    /// The file `~/.config/ccx/keys/<name>` at mode 0600
+    /// (`key_store = "file"`).
+    File,
+    /// The stdout of a shell command (`key_command = "..."`).
+    Command(String),
 }
 
 /// Thresholds in percent used, and stickiness in points.
@@ -135,6 +159,9 @@ struct RawAccount {
     enabled: Option<bool>,
     email: Option<String>,
     own: Option<Vec<String>>,
+    kind: Option<String>,
+    key_store: Option<String>,
+    key_command: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -176,7 +203,8 @@ pub fn overlay_path(env: &Env) -> Result<PathBuf> {
     Ok(config_dir(env)?.join("config.local.toml"))
 }
 
-fn config_dir(env: &Env) -> Result<PathBuf> {
+/// The ccx config dir: `$XDG_CONFIG_HOME/ccx`, else `~/.config/ccx`.
+pub fn config_dir(env: &Env) -> Result<PathBuf> {
     if let Some(xdg) = env.get("XDG_CONFIG_HOME").map(Path::new)
         && xdg.is_absolute()
     {
@@ -289,6 +317,7 @@ fn build(raw: RawConfig, home: &OsStr) -> Result<Config> {
         }
         let dir = account
             .dir
+            .clone()
             .ok_or_else(|| format!("accounts.{name}: missing key `dir`"))?;
         let dir_text = dir;
         let dir = canonical(&dir_text, home);
@@ -309,6 +338,12 @@ fn build(raw: RawConfig, home: &OsStr) -> Result<Config> {
         {
             return Err(format!("accounts.{name}.weight: must be a positive number"));
         }
+        let api_key = key_source(&name, &account)?;
+        if api_key.is_some() && dir == base_dir {
+            return Err(format!(
+                "accounts.{name}.kind: the base account cannot be an API-key account"
+            ));
+        }
         let own = account.own.unwrap_or_default();
         if let Some(item) = own.iter().find(|item| !crate::sync::valid_own(item)) {
             return Err(format!(
@@ -325,6 +360,7 @@ fn build(raw: RawConfig, home: &OsStr) -> Result<Config> {
             enabled: account.enabled.unwrap_or(true),
             email: account.email,
             own,
+            api_key,
         });
     }
     // Dirs are unique, so at most one account is the base account.
@@ -363,6 +399,48 @@ fn build(raw: RawConfig, home: &OsStr) -> Result<Config> {
             deny: prefs.deny.unwrap_or_default(),
         },
     })
+}
+
+/// The key source of an account from `kind`, `key_store` and
+/// `key_command`. `None` for a subscription account.
+fn key_source(name: &str, account: &RawAccount) -> Result<Option<KeySource>> {
+    let store = account.key_store.as_deref();
+    let command = account.key_command.as_deref();
+    match account.kind.as_deref() {
+        None | Some("subscription") => {
+            if store.is_some() || command.is_some() {
+                let key = if store.is_some() {
+                    "key_store"
+                } else {
+                    "key_command"
+                };
+                return Err(format!(
+                    "accounts.{name}.{key}: only an account with kind = \"api_key\" can have it"
+                ));
+            }
+            Ok(None)
+        }
+        Some("api_key") => match (store, command) {
+            (Some("keyring"), None) => Ok(Some(KeySource::Keyring)),
+            (Some("file"), None) => Ok(Some(KeySource::File)),
+            (Some(other), None) => Err(format!(
+                "accounts.{name}.key_store: `{other}` is not \"keyring\" or \"file\""
+            )),
+            (None, Some(command)) if !command.trim().is_empty() => {
+                Ok(Some(KeySource::Command(command.to_string())))
+            }
+            (None, Some(_)) => Err(format!("accounts.{name}.key_command: is empty")),
+            (Some(_), Some(_)) => Err(format!(
+                "accounts.{name}: set key_store or key_command, not both"
+            )),
+            (None, None) => Err(format!(
+                "accounts.{name}: an API-key account needs key_store or key_command"
+            )),
+        },
+        Some(other) => Err(format!(
+            "accounts.{name}.kind: `{other}` is not \"subscription\" or \"api_key\""
+        )),
+    }
 }
 
 fn percent(key: &str, value: Option<u32>, default: u32) -> Result<u32> {
@@ -625,6 +703,85 @@ mod tests {
             assert!(err.contains("accounts.work.own"), "{err}");
             assert!(err.contains(bad), "{err}");
         }
+    }
+
+    // API-key accounts (#20).
+
+    #[test]
+    fn api_key_accounts_load_with_each_key_source() {
+        let config = parse_ok(&format!(
+            r#"{MINIMAL}
+            [accounts.paid]
+            dir = "~/.claude-paid"
+            kind = "api_key"
+            key_store = "keyring"
+            [accounts.paidfile]
+            dir = "~/.claude-paidfile"
+            kind = "api_key"
+            key_store = "file"
+            [accounts.paidcmd]
+            dir = "~/.claude-paidcmd"
+            kind = "api_key"
+            key_command = "pass show anthropic"
+            [accounts.sub]
+            dir = "~/.claude-sub"
+            kind = "subscription"
+            "#
+        ));
+        let source = |name: &str| config.account(name).unwrap().api_key.clone();
+        assert_eq!(source("paid"), Some(KeySource::Keyring));
+        assert_eq!(source("paidfile"), Some(KeySource::File));
+        assert_eq!(
+            source("paidcmd"),
+            Some(KeySource::Command("pass show anthropic".into()))
+        );
+        assert_eq!(source("sub"), None);
+        assert_eq!(source("angel2"), None);
+        assert!(config.account("paid").unwrap().is_paid());
+        assert!(!config.account("angel2").unwrap().is_paid());
+    }
+
+    #[test]
+    fn api_key_settings_that_are_not_valid_are_errors() {
+        let cases = [
+            ("kind = \"api_key\"", "needs key_store or key_command"),
+            (
+                "kind = \"api_key\"\nkey_store = \"file\"\nkey_command = \"x\"",
+                "not both",
+            ),
+            (
+                "kind = \"api_key\"\nkey_store = \"vault\"",
+                "key_store: `vault`",
+            ),
+            (
+                "kind = \"api_key\"\nkey_command = \" \"",
+                "key_command: is empty",
+            ),
+            ("key_store = \"keyring\"", "only an account with kind"),
+            (
+                "kind = \"subscription\"\nkey_command = \"x\"",
+                "key_command",
+            ),
+            ("kind = \"team\"", "kind: `team`"),
+        ];
+        for (keys, want) in cases {
+            let err = parse_err(&format!(
+                "{MINIMAL}\n[accounts.paid]\ndir = \"~/.claude-paid\"\n{keys}\n"
+            ));
+            assert!(err.contains("accounts.paid"), "{keys}: {err}");
+            assert!(err.contains(want), "{keys}: {err}");
+        }
+    }
+
+    #[test]
+    fn base_account_cannot_be_an_api_key_account() {
+        let err = parse_err(
+            "[accounts.main]\ndir = \"~/.claude\"\nkind = \"api_key\"\nkey_store = \"keyring\"\n",
+        );
+        assert!(
+            err.contains("base account cannot be an API-key account"),
+            "{err}"
+        );
     }
 
     // Validation rules.

@@ -128,7 +128,7 @@ _ccx() {
             return 0
             ;;
         ccx__subcmd__manage__subcmd__add)
-            opts="-y -h --dir --email --no-login --no-prefs --yes --help"
+            opts="-y -h --dir --email --no-login --no-prefs --yes --api-key --key-command --key-file --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -139,6 +139,10 @@ _ccx() {
                     return 0
                     ;;
                 --email)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --key-command)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;

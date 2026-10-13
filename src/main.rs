@@ -1,13 +1,16 @@
 mod add;
+mod add_api_key;
 mod adopt;
 mod bootstrap;
 mod config;
 mod doctor;
 mod env;
 mod handoff;
+mod keystore;
 mod launch;
 mod lifecycle;
 mod list;
+mod paid;
 mod paths;
 mod pick;
 mod prefs;
@@ -129,6 +132,19 @@ enum Manage {
         /// Confirm the plan without a prompt.
         #[arg(short, long)]
         yes: bool,
+        /// Make an API-key account: a paid fallback. Add reads the key
+        /// with a hidden prompt, or one line of stdin, and keeps it in the
+        /// OS secret store as `ccx-NAME`. There is no login.
+        #[arg(long, conflicts_with_all = ["email", "no_login", "no_prefs"])]
+        api_key: bool,
+        /// With `--api-key`: get the key from the stdout of this shell
+        /// command at each paid launch. ccx keeps no copy of the key.
+        #[arg(long, value_name = "COMMAND", requires = "api_key")]
+        key_command: Option<String>,
+        /// With `--api-key`: keep the key in `~/.config/ccx/keys/NAME` at
+        /// mode 0600, not in the OS secret store.
+        #[arg(long, requires = "api_key", conflicts_with = "key_command")]
+        key_file: bool,
     },
     /// Log in to an account with `claude auth login`.
     ///
@@ -322,7 +338,8 @@ fn run(args: Vec<OsString>) -> config::Result<ExitCode> {
             account,
             args,
             subcommand,
-        } => run_launch(account.as_deref(), subcommand, args),
+            allow_paid,
+        } => run_launch(account.as_deref(), subcommand, args, allow_paid),
     }
 }
 
@@ -340,6 +357,9 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
                     no_login,
                     no_prefs,
                     yes,
+                    api_key,
+                    key_command,
+                    key_file,
                 } => add::run(
                     &env,
                     &add::Args {
@@ -349,6 +369,9 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
                         no_login,
                         no_prefs,
                         yes,
+                        api_key,
+                        key_command,
+                        key_file,
                     },
                 )?,
                 Manage::Login { name, all: _ } => {
@@ -449,6 +472,7 @@ fn run_launch(
     name: Option<&str>,
     subcommand: Option<&str>,
     mut args: Vec<OsString>,
+    allow_paid: bool,
 ) -> config::Result<ExitCode> {
     let parent = Env::from_process();
     let depth = launch::check_depth(&parent)?;
@@ -483,13 +507,24 @@ fn run_launch(
                 claude: claude.as_deref(),
                 depth,
                 dry_run,
+                allow_paid,
             };
             let (account, picked) = auto_select(&context, &mut args)?;
             auto = Some(picked);
             account
         }
     };
-    let (env, removed) = launch::build_env(&parent, account, depth);
+    // ccx asks before each launch on a paid API-key account (#20).
+    let paid = account.is_paid();
+    if paid && !auto.as_ref().is_some_and(|a| a.paid_consent) {
+        paid::confirm_named(account, allow_paid)?;
+    }
+    let (mut env, mut removed) = launch::build_env(&parent, account, depth);
+    if paid {
+        // The key goes only into the environment of this one exec.
+        paid::add_key(&mut env, account, &parent)?;
+        removed.retain(|key| *key != paid::KEY_VAR);
+    }
 
     // Banner and warnings only on a terminal and not for `-p`, so pipes
     // and scripts stay clean.
@@ -505,6 +540,7 @@ fn run_launch(
         if config.launch.banner {
             match auto.as_ref().and_then(|a| a.banner.as_ref()) {
                 Some(banner) => eprintln!("{banner}"),
+                None if paid => eprintln!("{}", paid::banner(&account.name)),
                 None => eprintln!("ccx: account {} ({})", account.name, account.dir.display()),
             }
         }
@@ -562,6 +598,8 @@ struct AutoContext<'a> {
     claude: Option<&'a std::path::Path>,
     depth: u32,
     dry_run: bool,
+    /// `--allow-paid`: use a paid fallback with no prompt.
+    allow_paid: bool,
 }
 
 /// The result of an automatic pick: the messages and the state to write.
@@ -574,6 +612,8 @@ struct Auto {
     notes: Vec<String>,
     /// The pick state to write, for a pick by usage.
     state: Option<(std::path::PathBuf, pick::State)>,
+    /// True when the user agreed to the paid fallback (#20).
+    paid_consent: bool,
 }
 
 /// The enabled accounts with their usage. When the usage data of an
@@ -589,9 +629,10 @@ fn fresh_candidates(cx: &AutoContext, home: &std::ffi::OsStr) -> Vec<pick::Candi
     let stale: Vec<&config::Account> = candidates
         .iter()
         .filter(|c| {
-            c.usage.as_ref().is_none_or(|u| {
-                !refresh::is_fresh(u.fetched_at_ms, now, config.usage.fresh_minutes)
-            })
+            !c.paid
+                && c.usage.as_ref().is_none_or(|u| {
+                    !refresh::is_fresh(u.fetched_at_ms, now, config.usage.fresh_minutes)
+                })
         })
         .filter_map(|c| config.account(&c.name))
         .collect();
@@ -648,6 +689,22 @@ fn auto_select<'a>(
     ) else {
         return Ok((config.base(), Auto::default()));
     };
+    if let Some(index) = pick::paid_offer(&candidates, Some(&decision)) {
+        let name = &candidates[index].name;
+        let ask = || paid::ask(&paid::fallback_question(name));
+        if paid::consent(cx.allow_paid, paid::terminal(), ask)? {
+            let account = config
+                .account(name)
+                .expect("each candidate is a configured account");
+            // No pick state: stickiness is only for subscription accounts.
+            let auto = Auto {
+                banner: Some(paid::banner(name)),
+                paid_consent: true,
+                ..Auto::default()
+            };
+            return Ok((account, auto));
+        }
+    }
     let chosen = &candidates[decision.index];
     let account = config
         .account(&chosen.name)

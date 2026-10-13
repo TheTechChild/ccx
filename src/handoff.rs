@@ -841,7 +841,17 @@ fn resume(config: &Config, env: &Env, target: &Account, done: &Done) -> Result<E
         );
         return Ok(ExitCode::from(EXIT_EXEC_FAILED));
     };
-    let (child_env, _) = launch::build_env(env, target, depth);
+    let (mut child_env, _) = launch::build_env(env, target, depth);
+    if target.is_paid() {
+        // A paid account needs a yes and its key, like `ccx @name` (#20).
+        crate::paid::confirm_named(target, false).map_err(|e| {
+            format!(
+                "{e}. The copy is done; to resume, run `ccx --allow-paid @{} --resume {}`",
+                target.name, done.id
+            )
+        })?;
+        crate::paid::add_key(&mut child_env, target, env)?;
+    }
     let mut cmd = Command::new(&claude);
     cmd.args(["--resume", done.id.as_str()])
         .env_clear()

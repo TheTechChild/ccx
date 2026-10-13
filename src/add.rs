@@ -50,6 +50,12 @@ pub struct Args {
     pub no_prefs: bool,
     /// Confirm the plan without a prompt.
     pub yes: bool,
+    /// Make an API-key account, a paid fallback (#20).
+    pub api_key: bool,
+    /// With `api_key`: get the key from this command at each paid launch.
+    pub key_command: Option<String>,
+    /// With `api_key`: keep the key in the 0600 key file.
+    pub key_file: bool,
 }
 
 /// The kind, the tier and the weight of an account after the login.
@@ -74,6 +80,9 @@ impl Info {
 
 /// Runs `ccx manage add`.
 pub fn run(parent: &Env, args: &Args) -> Result<()> {
+    if args.api_key {
+        return crate::add_api_key::run(parent, args);
+    }
     let home = config::home(parent)?;
     let config = config::load(parent)?;
     let config_path = config::config_path(parent)?;
@@ -92,6 +101,7 @@ pub fn run(parent: &Env, args: &Args) -> Result<()> {
         email: None,
         own: Vec::new(),
         is_base: false,
+        api_key: None,
     };
 
     let depth = launch::check_depth(parent)?;

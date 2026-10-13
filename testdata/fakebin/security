@@ -1,25 +1,100 @@
-#!/bin/sh
+#!/usr/bin/env perl
 # Fake macOS `security` for end-to-end tests. ccx must never use the real
 # keychain in a test.
 #
 # - `security dump-keychain` prints one synthetic generic-password item for
 #   each line of FAKE_KEYCHAIN_SERVICES. It prints attributes only, like the
 #   real command with no `-d`.
+# - The ccx key store (#20) uses a fake store: one file for each item in
+#   FAKE_SECRET_DIR (default "$HOME/.fake-secrets"). The same store is used
+#   by the fake `secret-tool`. Only items named "ccx-*" are allowed.
+#   - `security -i` reads one line from stdin:
+#     `add-generic-password -U -a ccx -s SERVICE -X HEX`.
+#   - `security find-generic-password -a ccx -s SERVICE -w` prints the key.
+#   - `security delete-generic-password -a ccx -s SERVICE` deletes it. It
+#     exits 44 when the item is not there.
+#   FAKE_SECRET_FAIL makes each store call fail with exit 1.
 # - All other calls fail, so that a test finds a call that is not expected.
-if [ "$*" != "dump-keychain" ]; then
-  echo "fake security: unexpected arguments: $*" >&2
-  exit 1
-fi
-printf '%s\n' "${FAKE_KEYCHAIN_SERVICES:-}" | while IFS= read -r service; do
-  [ -n "$service" ] || continue
-  cat <<ITEM
+use strict;
+use warnings;
+
+sub fail { print STDERR "fake security: $_[0]\n"; exit 1; }
+
+if ("@ARGV" eq "dump-keychain") {
+    for my $service (split /\n/, $ENV{FAKE_KEYCHAIN_SERVICES} // '') {
+        next if $service eq '';
+        print <<"ITEM";
 keychain: "/Users/example/Library/Keychains/login.keychain-db"
 version: 512
 class: "genp"
 attributes:
     0x00000007 <blob>="$service"
-    "acct"<blob>="user@example.com"
-    "cdat"<timedate>=0x32303236303130313030303030305A00  "20260101000000Z\000"
+    "acct"<blob>="user\@example.com"
+    "cdat"<timedate>=0x32303236303130313030303030305A00  "20260101000000Z\\000"
     "svce"<blob>="$service"
 ITEM
-done
+    }
+    exit 0;
+}
+
+my $dir = $ENV{FAKE_SECRET_DIR} // "$ENV{HOME}/.fake-secrets";
+
+# Returns the value of `-s`, and checks that it is a ccx item.
+sub service_of {
+    my %opt = @_;
+    my $service = $opt{'-s'} // fail("no -s");
+    fail("not a ccx item: $service") unless $service =~ /^ccx-[a-z0-9][a-z0-9_-]*$/;
+    fail("the account is not ccx") unless ($opt{'-a'} // '') eq 'ccx';
+    return $service;
+}
+
+sub options {
+    my %opt;
+    while (@_) {
+        my $flag = shift;
+        if ($flag eq '-w' || $flag eq '-U') { $opt{$flag} = 1; next; }
+        $opt{$flag} = shift;
+    }
+    return %opt;
+}
+
+my $command = shift @ARGV // '';
+if ($command eq '-i') {
+    fail("unexpected arguments after -i") if @ARGV;
+    my $line = <STDIN> // fail("no command on stdin");
+    chomp $line;
+    my ($word, @args) = split ' ', $line;
+    fail("unexpected command: $word") unless $word eq 'add-generic-password';
+    fail("the store is not available") if $ENV{FAKE_SECRET_FAIL};
+    my %opt = options(@args);
+    my $service = service_of(%opt);
+    my $hex = $opt{'-X'} // fail("no -X");
+    mkdir $dir;
+    open(my $fh, '>', "$dir/$service") or fail("cannot write: $!");
+    print $fh pack('H*', $hex);
+    close($fh);
+    exit 0;
+}
+if ($command eq 'find-generic-password') {
+    fail("the store is not available") if $ENV{FAKE_SECRET_FAIL};
+    my %opt = options(@ARGV);
+    my $service = service_of(%opt);
+    fail("only -w is allowed") unless $opt{'-w'};
+    open(my $fh, '<', "$dir/$service") or do {
+        print STDERR "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.\n";
+        exit 44;
+    };
+    local $/;
+    my $key = <$fh>;
+    print "$key\n";
+    exit 0;
+}
+if ($command eq 'delete-generic-password') {
+    fail("the store is not available") if $ENV{FAKE_SECRET_FAIL};
+    my %opt = options(@ARGV);
+    my $service = service_of(%opt);
+    exit 44 unless -e "$dir/$service";
+    unlink "$dir/$service" or fail("cannot delete: $!");
+    exit 0;
+}
+fail("unexpected arguments: $command @ARGV");

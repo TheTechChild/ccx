@@ -292,9 +292,9 @@ fn list_prints_a_table_and_stable_json() {
     assert_eq!(
         table,
         "\
-NAME    DIR               EMAIL               ALIASES
-angel2  ~/.claude-angel2  angel2@example.com  -
-main    ~/.claude         main@example.com    -
+NAME    DIR               EMAIL               ALIASES  KIND
+angel2  ~/.claude-angel2  angel2@example.com  -        subscription
+main    ~/.claude         main@example.com    -        subscription
 "
     );
 
@@ -305,9 +305,9 @@ main    ~/.claude         main@example.com    -
         value,
         json!({"accounts": [
             {"aliases": [], "base": false, "dir": format!("{home}/.claude-angel2"),
-             "email": "angel2@example.com", "name": "angel2"},
+             "email": "angel2@example.com", "kind": "subscription", "name": "angel2"},
             {"aliases": [], "base": true, "dir": format!("{home}/.claude"),
-             "email": "main@example.com", "name": "main"},
+             "email": "main@example.com", "kind": "subscription", "name": "main"},
         ]})
     );
     // Keys print in a fixed order.
