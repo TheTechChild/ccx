@@ -1,0 +1,10 @@
+[Unit]
+Description=ccx usage refresh every 300 s
+
+[Timer]
+OnActiveSec=1min
+OnUnitActiveSec=300
+Unit=ccx-refresh.service
+
+[Install]
+WantedBy=timers.target

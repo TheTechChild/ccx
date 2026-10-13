@@ -17,6 +17,7 @@ use crate::config::{self, Account, Config, Result};
 use crate::env::Env;
 use crate::launch;
 use crate::paths::{expand_tilde, tilde};
+use crate::service;
 use crate::sync::{self, Action, Class, Plan, State, Want};
 
 /// Variables that override the account. ccx removes or replaces them at
@@ -122,6 +123,7 @@ pub fn check_all(env: &Env) -> Vec<Finding> {
     };
     out.push(check_claude(config.as_ref(), env, home));
     out.extend(check_env(env));
+    out.extend(check_service(env, home));
     let Some(config) = config else {
         return out;
     };
@@ -179,6 +181,27 @@ fn check_claude(config: Option<&Config>, env: &Env, home: &OsStr) -> Finding {
         );
     }
     ok("claude", format!("{shown} ({version})"))
+}
+
+/// The paths in the installed background service (ADR 0007). No finding
+/// when no service is installed.
+fn check_service(env: &Env, home: &OsStr) -> Vec<Finding> {
+    let installed = service::detect(env).and_then(|kind| service::installed(kind, env));
+    match installed {
+        Ok(None) => Vec::new(),
+        Err(e) => vec![fail("service", e)],
+        Ok(Some((path, recorded))) => {
+            let problems = service::problems(&recorded);
+            if problems.is_empty() {
+                vec![ok(
+                    "service",
+                    format!("{} uses paths that exist", tilde(&path, home)),
+                )]
+            } else {
+                problems.into_iter().map(|p| fail("service", p)).collect()
+            }
+        }
+    }
 }
 
 /// The override variables that are set, also with an empty value. Doctor

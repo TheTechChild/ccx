@@ -184,6 +184,7 @@ ccx manage doctor --json   # Show the results as JSON for scripts.
 | `link` | The sync plan of each account. A shared item that is a real file or directory, for example `settings.json` after a write replaced the link, is a `FAIL`. |
 | `skill` | Real directories and files in `<account>/skills/` that are not links and not `synced`: "local-only skill <name> in <account>; promote to base?". |
 | `home-path` | `hooks` and `statusLine` commands in `settings.json` that use the absolute home path. Doctor shows the `$HOME/...` form. |
+| `service` | The installed background service. Each path in the job (ccx and `claude`) exists. If not, doctor tells you to run `ccx manage service install` again. Doctor shows no line when no service is installed. |
 | `keychain` | macOS only. Keychain items `Claude Code-credentials-*` that agree with no account directory. Doctor reads only the item names, never the secret values. |
 
 The exit code is 0 when all checks pass, 1 when there is a `WARN` and 2 when there is a `FAIL`.
@@ -248,6 +249,27 @@ All fetches use one file lock: `~/.local/state/ccx/refresh.lock`. ccx records th
 
 ccx releases the lock before it starts the background refresh and before it starts `claude`. `ccx @name` fetches nothing and starts no refresh. Set `CCX_NO_REFRESH=1` to stop the blocking fetch and the background refresh of a launch.
 
+### Background service
+
+The background service is optional. It runs `ccx usage refresh --all --background` every 300 seconds. Thus, the usage cache is fresh before a launch needs it. Stale-while-revalidate works without the service.
+
+```sh
+ccx manage service install     # Write the job for this system and load it.
+ccx manage service status      # Show the job, the last refresh and the age of each usage cache.
+ccx manage service uninstall   # Stop the job and remove its files.
+```
+
+| System | What `install` does |
+|---|---|
+| macOS | It writes `~/Library/LaunchAgents/io.github.thetechchild.ccx.refresh.plist` with `RunAtLoad` and `StartInterval` 300, and loads it with `launchctl bootstrap`. |
+| Linux with systemd | It writes `ccx-refresh.service` and `ccx-refresh.timer` in `~/.config/systemd/user/` and runs `systemctl --user enable --now ccx-refresh.timer`. When linger is off, it tells you to run `loginctl enable-linger`. Without linger, the timer runs only while you are logged in. |
+| Linux with no systemd | It prints a crontab line. Add the line with `crontab -e`. ccx never edits the crontab and changes no files. |
+
+- The job uses the absolute path of ccx and the absolute path of `claude`. ccx finds the `claude` path when you run `install`, and puts it in `CCX_CLAUDE_BIN`. The `PATH` of the job is the directory of `claude`, then `/usr/bin:/bin:/usr/sbin:/sbin` ([ADR 0007](docs/adr/0007-m0-manual-tests.md)).
+- When `claude` moves, for example after a mise upgrade, the job cannot find it. `ccx manage service status` and `ccx manage doctor` then show an error. Run `ccx manage service install` again.
+- The job is a background refresh. It uses the same lock and the same `usage.refresh_min_gap_secs` rule as the refresh of a launch. Thus, a job run and a launch never fetch at the same time.
+- A second `install` with no changes does nothing. `status` works also when no service is installed. Its exit code is 1 when a path in the job does not exist.
+
 ### The `/usage` fetch
 
 ccx runs this command for each account ([ADR 0005](docs/adr/0005-m0-usage-hooks-off.md)):
@@ -311,6 +333,7 @@ Issue #3 has the full configuration schema.
 | `CCX_CONFIG` | Input. The path of `config.toml`. |
 | `CCX_DEPTH` | Internal. ccx stops with an error when `claude` starts ccx again too many times. |
 | `CCX_DRY_RUN=1` | Input. Show the account, the environment changes and the arguments. Do not start `claude`. |
+| `CCX_SERVICE_KIND` | Input, for tests. Select the service manager of `ccx manage service`: `launchd`, `systemd` or `cron`. |
 | `CCX_NO_REFRESH=1` | Input. An automatic launch does not fetch usage and does not start the background refresh. |
 
 ccx removes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` before it starts `claude`, because they override the account login. On a terminal, ccx shows one warning for each variable that it removes. When stdout or stderr is not a terminal, or for `-p` runs, ccx shows no banner and no warnings.

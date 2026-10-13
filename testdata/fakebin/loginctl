@@ -1,0 +1,14 @@
+#!/bin/sh
+# Fake `loginctl` for end-to-end tests.
+#
+# - Each call appends its arguments as one line to FAKE_SERVICE_LOG.
+# - `show-user <uid> --property=Linger --value` prints FAKE_LINGER
+#   (default "no").
+# - All other calls fail.
+[ -n "${FAKE_SERVICE_LOG:-}" ] && printf 'loginctl %s\n' "$*" >>"$FAKE_SERVICE_LOG"
+if [ "$1" = "show-user" ] && [ "$3 $4" = "--property=Linger --value" ]; then
+  echo "${FAKE_LINGER:-no}"
+  exit 0
+fi
+echo "fake loginctl: unexpected arguments: $*" >&2
+exit 1

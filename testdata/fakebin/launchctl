@@ -1,0 +1,43 @@
+#!/bin/sh
+# Fake macOS `launchctl` for end-to-end tests. ccx must never load a real
+# job in a test.
+#
+# - Each call appends its arguments as one line to FAKE_SERVICE_LOG.
+# - The file FAKE_SERVICE_STATE/loaded exists while the job is loaded.
+# - `print gui/<uid>/<label>` exits 0 when the job is loaded, else 113.
+# - `bootstrap gui/<uid> <plist>` loads the job. It fails when the job is
+#   loaded or the plist does not exist, like the real command.
+# - `bootout gui/<uid>/<label>` unloads the job. It fails when the job is
+#   not loaded.
+# - All other calls fail.
+if [ -z "${FAKE_SERVICE_STATE:-}" ]; then
+  echo "fake launchctl: FAKE_SERVICE_STATE is not set" >&2
+  exit 1
+fi
+[ -n "${FAKE_SERVICE_LOG:-}" ] && printf 'launchctl %s\n' "$*" >>"$FAKE_SERVICE_LOG"
+loaded="$FAKE_SERVICE_STATE/loaded"
+case "$1" in
+  print)
+    [ -e "$loaded" ] && exit 0
+    echo "Could not find service \"$2\"" >&2
+    exit 113
+    ;;
+  bootstrap)
+    if [ -e "$loaded" ] || [ ! -f "$3" ]; then
+      echo "Bootstrap failed: 5: Input/output error" >&2
+      exit 5
+    fi
+    : >"$loaded"
+    ;;
+  bootout)
+    if [ ! -e "$loaded" ]; then
+      echo "Boot-out failed: 3: No such process" >&2
+      exit 3
+    fi
+    rm -f "$loaded"
+    ;;
+  *)
+    echo "fake launchctl: unexpected arguments: $*" >&2
+    exit 1
+    ;;
+esac

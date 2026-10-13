@@ -1,0 +1,33 @@
+#!/bin/sh
+# Fake `systemctl --user` for end-to-end tests. ccx must never change a
+# real systemd unit in a test.
+#
+# - Each call appends its arguments as one line to FAKE_SERVICE_LOG.
+# - The file FAKE_SERVICE_STATE/active exists while the timer is active.
+# - `--user daemon-reload` does nothing.
+# - `--user enable --now <timer>` makes the timer active.
+# - `--user disable --now <timer>` makes the timer inactive.
+# - `--user is-active <timer>` prints active or inactive.
+# - All other calls fail.
+if [ -z "${FAKE_SERVICE_STATE:-}" ]; then
+  echo "fake systemctl: FAKE_SERVICE_STATE is not set" >&2
+  exit 1
+fi
+[ -n "${FAKE_SERVICE_LOG:-}" ] && printf 'systemctl %s\n' "$*" >>"$FAKE_SERVICE_LOG"
+active="$FAKE_SERVICE_STATE/active"
+if [ "$1" != "--user" ]; then
+  echo "fake systemctl: expected --user: $*" >&2
+  exit 1
+fi
+case "$2 $3" in
+  "daemon-reload ") ;;
+  "enable --now") : >"$active" ;;
+  "disable --now") rm -f "$active" ;;
+  is-active*)
+    if [ -e "$active" ]; then echo active; else echo inactive; exit 3; fi
+    ;;
+  *)
+    echo "fake systemctl: unexpected arguments: $*" >&2
+    exit 1
+    ;;
+esac
