@@ -34,6 +34,9 @@ _ccx() {
             ccx__subcmd__manage,adopt)
                 cmd="ccx__subcmd__manage__subcmd__adopt"
                 ;;
+            ccx__subcmd__manage,bootstrap)
+                cmd="ccx__subcmd__manage__subcmd__bootstrap"
+                ;;
             ccx__subcmd__manage,doctor)
                 cmd="ccx__subcmd__manage__subcmd__doctor"
                 ;;
@@ -111,7 +114,7 @@ _ccx() {
             return 0
             ;;
         ccx__subcmd__manage)
-            opts="-h --help adopt add login logout edit edit-config rm list shell-init sync doctor service"
+            opts="-h --help adopt add login logout edit edit-config rm bootstrap list shell-init sync doctor service"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -148,6 +151,20 @@ _ccx() {
             ;;
         ccx__subcmd__manage__subcmd__adopt)
             opts="-y -h --yes --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        ccx__subcmd__manage__subcmd__bootstrap)
+            opts="-h --service --no-service --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

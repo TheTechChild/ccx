@@ -4,7 +4,7 @@ ccx is a command-line tool. It starts Claude Code on the account that has the mo
 
 ccx is for a person who has more than one Claude Code account, for example a personal Max account and a work account. Each account has its own configuration directory. ccx reads the usage of each account and starts `claude` on the account that has the most capacity available. You can also name the account.
 
-> **Status:** Version 0.1.0. `ccx @name`, automatic selection, `ccx status`, `ccx usage refresh`, `ccx manage adopt`, `ccx manage add`, `ccx manage login`, `ccx manage logout`, `ccx manage edit`, `ccx manage edit-config`, `ccx manage rm`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync` (also `--prefs`), `ccx manage doctor`, `ccx manage service`, `ccx handoff` and the automatic handoff on `ccx -c` and `ccx --resume <id>` are available. Refer to [PLAN.md](PLAN.md) for the plan.
+> **Status:** Version 0.1.0. `ccx @name`, automatic selection, `ccx status`, `ccx usage refresh`, `ccx manage adopt`, `ccx manage add`, `ccx manage bootstrap`, `ccx manage login`, `ccx manage logout`, `ccx manage edit`, `ccx manage edit-config`, `ccx manage rm`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync` (also `--prefs`), `ccx manage doctor`, `ccx manage service`, `ccx handoff` and the automatic handoff on `ccx -c` and `ccx --resume <id>` are available. Refer to [PLAN.md](PLAN.md) for the plan.
 
 ## Credential policy
 
@@ -36,6 +36,8 @@ Each archive also has the static completion files in `completions/`: `_ccx` (zsh
 5. Show the usage of each account: `ccx status`.
 
 The bare `claude` command stays on the base account. ccx never makes an alias for `claude`.
+
+On a new machine that has a `config.toml` already, use `ccx manage bootstrap` for all the setup steps (refer to [Set up a new machine](#set-up-a-new-machine)).
 
 ## Usage
 
@@ -126,6 +128,29 @@ A bare `ccx --resume` (with no id, or with a search term) opens the session pick
 `ccx @name -c` and `CCX_ACCOUNT=name ccx -c` use only that account. They never do a handoff.
 
 ## Manage accounts
+
+### Set up a new machine
+
+```sh
+ccx manage bootstrap               # Ask before it installs the service.
+ccx manage bootstrap --service     # Install the service without a prompt.
+ccx manage bootstrap --no-service  # Do not install the service.
+```
+
+`ccx manage bootstrap` sets up ccx on a new macOS or Linux machine, also on an SSH server. It uses `config.toml` (`~/.config/ccx/config.toml`, for example a link to the file in your config repo, or `$CCX_CONFIG`). It does these steps:
+
+1. It finds `claude`. If claude is not installed, it shows the installer command, `curl -fsSL https://claude.ai/install.sh | bash`, and stops with exit code 1.
+2. It gets the base account `~/.claude` from `[base].repo`. If `~/.claude` does not exist, it clones the repo. If `~/.claude` exists and is not a git repo, it runs `git init`, `git remote add`, `git fetch` and `git checkout`. Before the checkout, it stops if a file of the repo is in `~/.claude` already. It never overwrites or deletes a file that is in `~/.claude`.
+3. It makes each missing account directory (mode 0700) and runs `ccx manage sync --all`.
+4. It logs in to each account that is not logged in, as `ccx manage login --all` does, with the email check.
+5. It offers to install the service (`ccx manage service install`). When there is no terminal, it does not install the service unless you give `--service`.
+6. It shows `ccx status` and the line to add to your shell profile, for example `eval "$(ccx manage shell-init zsh)"`.
+
+The emails for the email check come only from `~/.config/ccx/config.local.toml`. You never commit this file, so it is possibly not on a new machine. If it is missing, bootstrap shows a warning and does not check the emails. To check the emails, add the file before you run bootstrap.
+
+When there is no browser (an SSH session, or Linux with no `DISPLAY` and no `WAYLAND_DISPLAY`), `claude auth login` prints a login URL. ccx shows a note before the login. Open the URL on a different device and log in. Then paste the code into the claude prompt. ccx does not capture or change the output of claude, and it adds no flag to `claude auth login`. `ccx manage login` and `ccx manage add` show the same note.
+
+You can run bootstrap again. A step that is done already shows OK and changes nothing. At the end, bootstrap shows a summary with one line for each step: OK, DONE, SKIP or FAIL. When a step fails, bootstrap continues with the next steps and then exits with code 1.
 
 ### Adopt the accounts on this machine
 

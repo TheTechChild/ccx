@@ -408,6 +408,25 @@ fn texts(kind: Kind, job: &Job) -> Vec<String> {
     }
 }
 
+/// True when each file at `paths` has the text at the same index.
+fn same_files(paths: &[PathBuf], texts: &[String]) -> bool {
+    paths
+        .iter()
+        .zip(texts)
+        .all(|(path, text)| fs::read_to_string(path).is_ok_and(|have| &have == text))
+}
+
+/// True when the job for this ccx and this `claude` is installed and
+/// loaded, so `install` has nothing to change. Always false for cron.
+pub fn is_current(env: &Env) -> Result<bool> {
+    let kind = detect(env)?;
+    if kind == Kind::Cron {
+        return Ok(false);
+    }
+    let job = current_job(env)?;
+    Ok(same_files(&files(kind, env)?, &texts(kind, &job)) && loaded(kind, env)?)
+}
+
 /// `ccx manage service install`.
 pub fn install(env: &Env) -> Result<()> {
     let kind = detect(env)?;
@@ -422,10 +441,7 @@ pub fn install(env: &Env) -> Result<()> {
     }
     let paths = files(kind, env)?;
     let texts = texts(kind, &job);
-    let same = paths
-        .iter()
-        .zip(&texts)
-        .all(|(path, text)| fs::read_to_string(path).is_ok_and(|have| &have == text));
+    let same = same_files(&paths, &texts);
     let was_loaded = loaded(kind, env)?;
     if same && was_loaded {
         println!("ccx: the service is installed and loaded; nothing changed");

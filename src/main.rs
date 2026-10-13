@@ -1,5 +1,6 @@
 mod add;
 mod adopt;
+mod bootstrap;
 mod config;
 mod doctor;
 mod env;
@@ -195,6 +196,21 @@ enum Manage {
         #[arg(short, long)]
         yes: bool,
     },
+    /// Set up ccx on a new machine in one command.
+    ///
+    /// Bootstrap finds `claude`, clones the base `~/.claude` from
+    /// `[base].repo`, runs `ccx manage sync --all` and logs in to each
+    /// account that is not logged in, with the email check. Then it offers
+    /// the service and shows `ccx status` and the shell line. It is safe to
+    /// run again: a step that is done already shows OK.
+    Bootstrap {
+        /// Install the service without a prompt.
+        #[arg(long, conflicts_with = "no_service")]
+        service: bool,
+        /// Do not install the service.
+        #[arg(long)]
+        no_service: bool,
+    },
     /// Show each configured account.
     List {
         /// Print stable JSON.
@@ -358,6 +374,15 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
                 )?,
                 Manage::EditConfig => lifecycle::edit_config(&env)?,
                 Manage::Rm { name, purge, yes } => lifecycle::rm(&env, &name, purge, yes)?,
+                Manage::Bootstrap {
+                    service,
+                    no_service,
+                } => {
+                    let service = (service || no_service).then_some(service);
+                    if !bootstrap::run(&env, &bootstrap::Args { service })? {
+                        return Ok(ExitCode::FAILURE);
+                    }
+                }
                 Manage::List { json } => list::run(&env, json)?,
                 Manage::ShellInit { shell } => shell_init::run(&env, shell, Cli::command())?,
                 Manage::Sync {

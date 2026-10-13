@@ -13,6 +13,9 @@
 #   `oauthAccount.organizationRateLimitTier` FAKE_LOGIN_TIER (default
 #   "default_claude_max_5x") and `organizationType` FAKE_LOGIN_ORG_TYPE
 #   (default "claude_max"). FAKE_LOGIN_FAIL makes it fail with exit 1.
+#   When SSH_CONNECTION is set (no browser), it first prints a login URL
+#   and a prompt, then reads one line (the code) from stdin and writes it
+#   to "<dir>/.fake-login-code". An empty code fails with exit 1.
 # - `claude auth logout` removes "<dir>/.fake-login" and writes the file
 #   "<dir>/.fake-logout", where dir is CLAUDE_CONFIG_DIR, else HOME.
 #   FAKE_LOGOUT_FAIL makes it fail with exit 1.
@@ -61,6 +64,24 @@ if (@ARGV >= 2 && $ARGV[0] eq 'auth' && $ARGV[1] eq 'login') {
     if ($ENV{FAKE_LOGIN_FAIL}) {
         print STDERR "fake claude: login failed\n";
         exit 1;
+    }
+    if ($ENV{SSH_CONNECTION}) {
+        $| = 1;
+        print "Browser didn't open? Use the url below to sign in:\n\n";
+        print "https://claude.example.com/oauth/authorize?code=true&state=fake-state\n\n";
+        print "Paste code here if prompted > ";
+        # Read one byte at a time, so that the code of a later login stays
+        # in stdin.
+        my ($code, $char) = ('', '');
+        while (sysread(STDIN, $char, 1) && $char ne "\n") { $code .= $char; }
+        if ($code eq '') {
+            print STDERR "fake claude: no code\n";
+            exit 1;
+        }
+        open(my $fh, '>', "$dir/.fake-login-code") or die "cannot write $dir/.fake-login-code: $!";
+        print $fh $code;
+        close($fh);
+        print "\n";
     }
     my ($email) = "@ARGV" =~ /--email (\S+)/;
     my ($suffix) = $dir =~ m{/\.claude-([^/]+)$};

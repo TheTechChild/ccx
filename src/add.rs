@@ -294,7 +294,7 @@ pub fn plan(args: &Args, dir: &Path) -> Vec<String> {
 
 /// Makes `dir` and its missing parents. The dir gets mode 0700, also when
 /// it exists.
-fn make_dir(dir: &Path) -> Result<()> {
+pub fn make_dir(dir: &Path) -> Result<()> {
     let error = |e: std::io::Error| format!("cannot make {}: {e}", dir.display());
     fs::DirBuilder::new()
         .recursive(true)
@@ -312,6 +312,7 @@ fn terminal() -> bool {
 
 /// Runs `claude auth login` on the terminal of the user.
 fn login(claude: &Path, env: &Env, email: Option<&str>) -> Result<()> {
+    crate::lifecycle::note_no_browser(env);
     let mut command = Command::new(claude);
     command.args(["auth", "login"]);
     if let Some(email) = email {
