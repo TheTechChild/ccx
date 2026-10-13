@@ -108,6 +108,14 @@ _arguments "${_arguments_options[@]}" : \
 ':name -- The account to remove:_default' \
 && ret=0
 ;;
+(bootstrap)
+_arguments "${_arguments_options[@]}" : \
+'(--no-service)--service[Install the service without a prompt]' \
+'--no-service[Do not install the service]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (list)
 _arguments "${_arguments_options[@]}" : \
 '--json[Print stable JSON]' \
@@ -284,6 +292,7 @@ _ccx__subcmd__manage_commands() {
 'edit:Change the entry of an account and validate the config' \
 'edit-config:Open \`config.toml\` in \`\$EDITOR\` and validate it after the editor exits. When the new text is not valid, the old file stays' \
 'rm:Remove an account from the config. Keep its dir' \
+'bootstrap:Set up ccx on a new machine in one command' \
 'list:Show each configured account' \
 'shell-init:Print shell code for the profile\: completions and account aliases' \
 'sync:Link the shared setup of the base account into other accounts' \
@@ -301,6 +310,11 @@ _ccx__subcmd__manage__subcmd__add_commands() {
 _ccx__subcmd__manage__subcmd__adopt_commands() {
     local commands; commands=()
     _describe -t commands 'ccx manage adopt commands' commands "$@"
+}
+(( $+functions[_ccx__subcmd__manage__subcmd__bootstrap_commands] )) ||
+_ccx__subcmd__manage__subcmd__bootstrap_commands() {
+    local commands; commands=()
+    _describe -t commands 'ccx manage bootstrap commands' commands "$@"
 }
 (( $+functions[_ccx__subcmd__manage__subcmd__doctor_commands] )) ||
 _ccx__subcmd__manage__subcmd__doctor_commands() {

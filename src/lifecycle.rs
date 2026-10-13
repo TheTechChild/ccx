@@ -90,18 +90,35 @@ impl<'a> Setup<'a> {
 /// `ccx manage login NAME` or `ccx manage login --all`. Returns false when
 /// a login of `--all` failed.
 pub fn login(parent: &Env, name: Option<&str>) -> Result<bool> {
+    let Some(name) = name else {
+        return Ok(login_missing(parent)?.ok);
+    };
     let setup = Setup::load(parent)?;
     let claude = setup.claude()?;
     let overlay = adopt::read_doc(&setup.overlay_path)?;
-    if let Some(name) = name {
-        let account = setup.account(name)?;
-        let line = login_one(&setup, &claude, account, adopt::email_of(&overlay, name))?;
-        println!("{line}");
-        return Ok(true);
-    }
+    let account = setup.account(name)?;
+    let line = login_one(&setup, &claude, account, adopt::email_of(&overlay, name))?;
+    println!("{line}");
+    Ok(true)
+}
 
+/// The result of [`login_missing`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Logins {
+    /// False when a login failed.
+    pub ok: bool,
+    /// The number of logins that ccx did.
+    pub done: usize,
+}
+
+/// Logs in to each account that `claude auth status` shows as not logged
+/// in, with the email check. Then shows one summary line for each account.
+pub fn login_missing(parent: &Env) -> Result<Logins> {
+    let setup = Setup::load(parent)?;
+    let claude = setup.claude()?;
+    let overlay = adopt::read_doc(&setup.overlay_path)?;
     let mut summary = Vec::new();
-    let mut ok = true;
+    let mut logins = Logins { ok: true, done: 0 };
     for account in &setup.config.accounts {
         let env = setup.env(account)?;
         let text = status::auth_status_text(&claude, &env, setup.home, STATUS_TIMEOUT);
@@ -114,10 +131,11 @@ pub fn login(parent: &Env, name: Option<&str>) -> Result<bool> {
             continue;
         }
         let expected = adopt::email_of(&overlay, &account.name);
+        logins.done += 1;
         match login_one(&setup, &claude, account, expected) {
             Ok(line) => summary.push(line),
             Err(e) => {
-                ok = false;
+                logins.ok = false;
                 summary.push(format!("{}: FAILED: {e}", account.name));
             }
         }
@@ -126,7 +144,28 @@ pub fn login(parent: &Env, name: Option<&str>) -> Result<bool> {
     for line in summary {
         println!("  {line}");
     }
-    Ok(ok)
+    Ok(logins)
+}
+
+/// True when claude cannot open a browser for the login: in an SSH
+/// session, or on Linux with no `DISPLAY` and no `WAYLAND_DISPLAY`.
+pub fn no_browser(env: &Env, linux: bool) -> bool {
+    env.get("SSH_CONNECTION").is_some()
+        || env.get("SSH_TTY").is_some()
+        || (linux && env.get("DISPLAY").is_none() && env.get("WAYLAND_DISPLAY").is_none())
+}
+
+/// The note that ccx shows before a login when there is no browser.
+pub const NO_BROWSER_NOTE: &str = "\
+ccx: no browser is available. claude prints a login URL.
+ccx: open the URL on a different device and log in.
+ccx: then copy the code and paste it into the claude prompt here.";
+
+/// Shows [`NO_BROWSER_NOTE`] when there is no browser.
+pub fn note_no_browser(env: &Env) {
+    if no_browser(env, cfg!(target_os = "linux")) {
+        println!("{NO_BROWSER_NOTE}");
+    }
 }
 
 /// Runs `claude auth login [--email E]` for `account` and compares the
@@ -145,6 +184,7 @@ fn login_one(
         );
     }
     println!("Log in to account {name} ({})", account.dir.display());
+    note_no_browser(&env);
     let mut args = vec!["auth", "login"];
     if let Some(email) = expected {
         args.extend(["--email", email]);
@@ -651,6 +691,21 @@ stickiness = 5
             );
         }
         assert!(valid_email("work@example.com"));
+    }
+
+    #[test]
+    fn no_browser_in_ssh_or_on_linux_with_no_display() {
+        let env = |pairs: &[(&str, &str)]| pairs.iter().copied().collect::<Env>();
+        assert!(no_browser(
+            &env(&[("SSH_CONNECTION", "192.0.2.1 1 192.0.2.2 22")]),
+            false
+        ));
+        assert!(no_browser(&env(&[("SSH_TTY", "/dev/ttys001")]), false));
+        assert!(!no_browser(&env(&[]), false));
+        assert!(no_browser(&env(&[]), true));
+        assert!(no_browser(&env(&[("DISPLAY", "")]), true));
+        assert!(!no_browser(&env(&[("DISPLAY", ":0")]), true));
+        assert!(!no_browser(&env(&[("WAYLAND_DISPLAY", "wayland-0")]), true));
     }
 
     #[test]

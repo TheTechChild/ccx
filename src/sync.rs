@@ -596,12 +596,29 @@ pub fn targets<'a>(config: &'a Config, name: Option<&str>) -> Result<Vec<&'a Acc
 /// Runs `ccx manage sync`. `name` is `None` for `--all`. Returns false when
 /// CONFLICT items stay unchanged.
 pub fn run(env: &Env, name: Option<&str>, dry_run: bool, force: bool) -> Result<bool> {
+    Ok(run_counted(env, name, dry_run, force)?.ok)
+}
+
+/// The result of [`run_counted`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Synced {
+    /// False when CONFLICT items stay unchanged.
+    pub ok: bool,
+    /// The number of links and directories that sync made or changed.
+    pub changed: usize,
+}
+
+/// Runs `ccx manage sync` and returns the number of changes too.
+pub fn run_counted(env: &Env, name: Option<&str>, dry_run: bool, force: bool) -> Result<Synced> {
     let config = config::load(env)?;
     let base = config.base();
     let accounts = targets(&config, name)?;
     if accounts.is_empty() {
         println!("No accounts to sync. Only the base account is in the config.");
-        return Ok(true);
+        return Ok(Synced {
+            ok: true,
+            changed: 0,
+        });
     }
 
     let mut plans = Vec::new();
@@ -629,7 +646,10 @@ pub fn run(env: &Env, name: Option<&str>, dry_run: bool, force: bool) -> Result<
     }
     if dry_run {
         println!("Dry run. Nothing changed.");
-        return Ok(true);
+        return Ok(Synced {
+            ok: true,
+            changed: 0,
+        });
     }
 
     let conflicts: usize = plans
@@ -665,9 +685,11 @@ pub fn run(env: &Env, name: Option<&str>, dry_run: bool, force: bool) -> Result<
         println!(
             "{conflicts} CONFLICT items did not change. To move them to {BACKUP_DIR}/ and link them, run sync with --force."
         );
-        return Ok(false);
     }
-    Ok(true)
+    Ok(Synced {
+        ok: conflicts == 0 || apply_conflicts,
+        changed,
+    })
 }
 
 /// Asks to move the CONFLICT items. With no terminal, the answer is no.
