@@ -68,13 +68,16 @@ impl Fixture {
         dirs.join(":")
     }
 
-    /// A ccx command with a clean environment.
+    /// A ccx command with a clean environment. `CCX_NO_REFRESH=1` stops
+    /// the usage fetches of an automatic launch; `tests/refresh.rs` tests
+    /// them.
     fn ccx(&self, args: &[&str]) -> Command {
         let mut cmd = Command::new(CCX);
         cmd.args(args)
             .env_clear()
             .env("HOME", self.home())
-            .env("PATH", Self::path(&[]));
+            .env("PATH", Self::path(&[]))
+            .env("CCX_NO_REFRESH", "1");
         cmd
     }
 

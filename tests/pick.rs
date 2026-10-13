@@ -58,7 +58,9 @@ impl Fixture {
             .env_clear()
             .env("HOME", self.home())
             .env("PATH", format!("{}:/usr/bin:/bin", fakebin.display()))
-            .env("FAKE_CLAUDE_LOG", self.log());
+            .env("FAKE_CLAUDE_LOG", self.log())
+            // The usage fetches of a launch are in `tests/refresh.rs`.
+            .env("CCX_NO_REFRESH", "1");
         cmd
     }
 

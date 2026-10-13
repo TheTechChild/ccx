@@ -2,7 +2,7 @@
 
 ccx is a command-line tool. It starts Claude Code on the account that has the most usage available.
 
-> **Status:** Work in progress. ccx starts Claude Code on an account that you name, or on the account that it selects from the usage cache. `ccx manage adopt`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync`, `ccx manage doctor`, `ccx status` and `ccx usage refresh` are available. The automatic refresh of the usage cache is not available yet. Use `ccx usage refresh --all` or `ccx status` to refresh it. Refer to [PLAN.md](PLAN.md) for the plan.
+> **Status:** Work in progress. ccx starts Claude Code on an account that you name, or on the account that it selects from the usage cache. `ccx manage adopt`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync`, `ccx manage doctor`, `ccx status` and `ccx usage refresh` are available. ccx refreshes the usage cache automatically. Refer to [PLAN.md](PLAN.md) for the plan.
 
 ## Usage
 
@@ -16,7 +16,7 @@ ccx keeps these first words for its own commands: `manage`, `status`, `usage` an
 
 ### Automatic selection
 
-When you do not give `@name` and `CCX_ACCOUNT` is not set, ccx selects an enabled account from the usage data. ccx uses the usage cache of `ccx usage refresh` or `ccx status`, or `cachedUsageUtilization` in `.claude.json` when it is newer. The automatic selection does not run a `/usage` fetch.
+When you do not give `@name` and `CCX_ACCOUNT` is not set, ccx selects an enabled account from the usage data. ccx uses the usage cache, or `cachedUsageUtilization` in `.claude.json` when it is newer. Refer to [Automatic refresh](#automatic-refresh) for how ccx keeps the cache fresh.
 
 1. An account is "limited" when its session usage is 90% or more, its weekly usage is 95% or more, or a matched scoped weekly usage is 98% or more. A scoped weekly window matches when its model name is in the session model name (`--model`, else `model` in `settings.json`). Case is not important. A window whose reset time is in the past counts as 0%.
 2. The score of an account that is not limited is (100 − the higher of the session % and the weekly %) × the weight. The default weights are Pro 1, Max 5x 5 and Max 20x 20. Team, Enterprise and unknown tiers use 5. ccx gets the tier from `oauthAccount` in `.claude.json`. The `weight` key of an account overrides the default.
@@ -195,7 +195,25 @@ ccx usage refresh angel2   # Fetch the usage of one account.
 ccx usage refresh --all    # Fetch the usage of all enabled accounts.
 ```
 
-The refresh writes `~/.local/state/ccx/usage/<name>.json`. ccx writes a temporary file at mode 0600, then renames it. The refresh waits for a maximum of 30 seconds for each account. The exit code is 1 when a fetch fails.
+The refresh writes `~/.local/state/ccx/usage/<name>.json`. ccx writes a temporary file at mode 0600, then renames it. Thus, a reader never sees a partial file. The refresh waits for a maximum of 30 seconds for each account. The exit code is 1 when a fetch fails.
+
+### Automatic refresh
+
+ccx keeps the usage cache fresh, and most launches do not wait for a fetch. This applies only to an automatic launch (no `@name` and no `CCX_ACCOUNT`).
+
+1. When the usage data of each account is less than `usage.fresh_minutes` old (default 15), ccx uses it and does not wait. The usage data is the newer of the ccx cache and `cachedUsageUtilization`.
+2. When the usage data of an account is older or missing, ccx first runs a blocking fetch for that account. The blocking fetch has a limit of `usage.fetch_timeout_secs` (default 5). This limit includes the time to wait for the refresh lock. If the fetch does not complete in time, ccx uses the old data or `cachedUsageUtilization` and continues the launch.
+3. Before ccx starts `claude`, it starts `ccx usage refresh --all --background` as a detached process. This process continues after ccx starts `claude`. It writes nothing to the terminal.
+
+All fetches use one file lock: `~/.local/state/ccx/refresh.lock`. ccx records the start time of the last fetch in `~/.local/state/ccx/refresh.json`.
+
+| Fetch | When a different process holds the lock | The 60-second rule |
+|---|---|---|
+| Background refresh | It exits with no fetch. | It exits with no fetch when the last fetch started less than `usage.refresh_min_gap_secs` (default 60) ago. |
+| Blocking fetch of a launch | It waits for the lock within its time limit. Then it reads the cache again. | It does not use the rule. |
+| `ccx usage refresh` and `ccx status` | They wait for the lock. | They do not use the rule. |
+
+ccx releases the lock before it starts the background refresh and before it starts `claude`. `ccx @name` fetches nothing and starts no refresh. Set `CCX_NO_REFRESH=1` to stop the blocking fetch and the background refresh of a launch.
 
 ### The `/usage` fetch
 
@@ -234,6 +252,11 @@ session_avoid = 90         # Session usage (%) that makes an account limited.
 weekly_avoid = 95          # Weekly usage (%) that makes an account limited.
 scoped_avoid = 98          # Matched scoped weekly usage (%) that makes an account limited.
 stickiness = 10            # Points within the best score that keep the last account.
+
+[usage]                    # Optional. The limits of the automatic refresh.
+fresh_minutes = 15         # Usage data that is less old than this is fresh.
+fetch_timeout_secs = 5     # The time limit of the blocking fetch of a launch.
+refresh_min_gap_secs = 60  # The minimum time between two background refreshes.
 ```
 
 Put email addresses only in the overlay file `config.local.toml`. ccx reads it from `$XDG_CONFIG_HOME/ccx/`, or from `~/.config/ccx/`. ccx merges the overlay over `config.toml`. Do not commit the overlay. Give it mode 0600.
@@ -255,6 +278,7 @@ Issue #3 has the full configuration schema.
 | `CCX_CONFIG` | Input. The path of `config.toml`. |
 | `CCX_DEPTH` | Internal. ccx stops with an error when `claude` starts ccx again too many times. |
 | `CCX_DRY_RUN=1` | Input. Show the account, the environment changes and the arguments. Do not start `claude`. |
+| `CCX_NO_REFRESH=1` | Input. An automatic launch does not fetch usage and does not start the background refresh. |
 
 ccx removes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` before it starts `claude`, because they override the account login. On a terminal, ccx shows one warning for each variable that it removes. When stdout or stderr is not a terminal, or for `-p` runs, ccx shows no banner and no warnings.
 

@@ -245,7 +245,7 @@ _ccx() {
             return 0
             ;;
         ccx__subcmd__usage__subcmd__refresh)
-            opts="-h --all --help"
+            opts="-h --all --background --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

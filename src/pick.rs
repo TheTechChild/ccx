@@ -248,8 +248,8 @@ fn candidate(account: &Account, home: &OsStr) -> Candidate {
             text_at("/oauthAccount/organizationRateLimitTier"),
         )
     });
-    // The newer of the ccx cache and `cachedUsageUtilization`. Cache
-    // freshness and the refresh are in #11.
+    // The newer of the ccx cache and `cachedUsageUtilization`. The launch
+    // uses the age of this data for the blocking fetch (#11).
     let cache = usage::read_cache(&usage::cache_path(home, &account.name));
     let fallback = claude_json.as_ref().and_then(usage::parse_cached_value);
     let usage = match (cache, fallback) {

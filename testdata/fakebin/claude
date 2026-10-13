@@ -10,8 +10,9 @@
 # - `claude -p /usage ...` prints synthetic stream-json events. The
 #   `limits[]` array is FAKE_USAGE_LIMITS (JSON) when it is set. A dir name
 #   that contains "nousage" fails with exit 1. A dir name that contains
-#   "slow" sleeps for 30 seconds first. A dir name that contains "badjson"
-#   prints text that is not JSON.
+#   "slow" sleeps for 30 seconds first. FAKE_USAGE_SLEEP sleeps for that
+#   number of seconds first. A dir name that contains "badjson" prints text
+#   that is not JSON.
 # - All other calls print the program path, the arguments, the cwd and the
 #   environment as one JSON object, then exit 0.
 # - When FAKE_CLAUDE_LOG is set, each call also appends that JSON object
@@ -64,6 +65,7 @@ if (@ARGV >= 2 && $ARGV[0] eq '-p' && $ARGV[1] eq '/usage') {
         exit 1;
     }
     sleep 30 if $dir =~ /slow/;
+    select(undef, undef, undef, $ENV{FAKE_USAGE_SLEEP}) if $ENV{FAKE_USAGE_SLEEP};
     if ($dir =~ /badjson/) {
         print "this is not json\n";
         exit 0;

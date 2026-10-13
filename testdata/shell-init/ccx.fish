@@ -56,6 +56,7 @@ complete -c ccx -n "__fish_ccx_using_subcommand status" -s h -l help -d 'Print h
 complete -c ccx -n "__fish_ccx_using_subcommand usage; and not __fish_seen_subcommand_from refresh" -s h -l help -d 'Print help'
 complete -c ccx -n "__fish_ccx_using_subcommand usage; and not __fish_seen_subcommand_from refresh" -f -a "refresh" -d 'Run the `/usage` fetch and write `~/.local/state/ccx/usage/<name>.json`'
 complete -c ccx -n "__fish_ccx_using_subcommand usage; and __fish_seen_subcommand_from refresh" -l all -d 'Refresh all enabled accounts'
+complete -c ccx -n "__fish_ccx_using_subcommand usage; and __fish_seen_subcommand_from refresh" -l background -d 'Run as the detached background refresh: no output, no wait for the lock and the `usage.refresh_min_gap_secs` rule'
 complete -c ccx -n "__fish_ccx_using_subcommand usage; and __fish_seen_subcommand_from refresh" -s h -l help -d 'Print help'
 complete -c ccx -n "__fish_ccx_using_subcommand handoff" -s h -l help -d 'Print help'
 alias claude2 'ccx @angel2'
