@@ -574,7 +574,7 @@ pub fn health_check(base: &Account, account: &Account) -> Result<usize> {
 }
 
 /// The accounts that `ccx manage sync` changes.
-fn targets<'a>(config: &'a Config, name: Option<&str>) -> Result<Vec<&'a Account>> {
+pub fn targets<'a>(config: &'a Config, name: Option<&str>) -> Result<Vec<&'a Account>> {
     let Some(name) = name else {
         return Ok(config.accounts.iter().filter(|a| !a.is_base).collect());
     };

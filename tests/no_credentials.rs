@@ -72,6 +72,27 @@ fn sync_names_the_credentials_file_only_to_never_share_it() {
     }
 }
 
+/// The copy of MCP servers and preferences (#17) reads only `.claude.json`
+/// and `sessions/<pid>.json`. It never names a credential file, the MCP
+/// auth cache, a `.key` file or the keychain.
+#[test]
+fn prefs_names_no_credential_store() {
+    let text =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/prefs.rs")).unwrap();
+    let code = text.split("#[cfg(test)]").next().unwrap();
+    for pattern in [
+        "credentials",
+        "mcp-needs-auth",
+        ".key\"",
+        "security",
+        "keychain",
+        "accessToken",
+        "refreshToken",
+    ] {
+        assert!(!code.contains(pattern), "src/prefs.rs contains `{pattern}`");
+    }
+}
+
 #[test]
 fn guard_finds_each_forbidden_pattern() {
     let samples = [

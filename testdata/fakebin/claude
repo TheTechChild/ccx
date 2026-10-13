@@ -21,6 +21,10 @@
 #   "slow" sleeps for 30 seconds first. FAKE_USAGE_SLEEP sleeps for that
 #   number of seconds first. A dir name that contains "badjson" prints text
 #   that is not JSON.
+# - `claude mcp add-json -s user NAME JSON` adds the server NAME to
+#   `mcpServers` in "<CLAUDE_CONFIG_DIR>/.claude.json" (or "~/.claude.json"
+#   when CLAUDE_CONFIG_DIR is not set). It fails with exit 1 when the
+#   server exists or when NAME is FAKE_MCP_FAIL.
 # - All other calls print the program path, the arguments, the cwd and the
 #   environment as one JSON object, then exit 0.
 # - When FAKE_CLAUDE_LOG is set, each call also appends that JSON object
@@ -68,6 +72,32 @@ if (@ARGV >= 2 && $ARGV[0] eq 'auth' && $ARGV[1] eq 'login') {
     } }), "\n";
     close($fh);
     print "Login successful.\n";
+    exit 0;
+}
+
+if (@ARGV == 6 && $ARGV[0] eq 'mcp' && $ARGV[1] eq 'add-json'
+    && $ARGV[2] eq '-s' && $ARGV[3] eq 'user') {
+    my ($name, $config) = @ARGV[4, 5];
+    if (defined $ENV{FAKE_MCP_FAIL} && $ENV{FAKE_MCP_FAIL} eq $name) {
+        print STDERR "fake claude: cannot add $name\n";
+        exit 1;
+    }
+    my $file = ($ENV{CLAUDE_CONFIG_DIR} // $ENV{HOME}) . '/.claude.json';
+    my $data = {};
+    if (open(my $fh, '<', $file)) {
+        local $/;
+        $data = $json->decode(<$fh>);
+        close($fh);
+    }
+    if (exists $data->{mcpServers}{$name}) {
+        print STDERR "fake claude: MCP server $name already exists\n";
+        exit 1;
+    }
+    $data->{mcpServers}{$name} = $json->decode($config);
+    open(my $fh, '>', $file) or die "cannot write $file: $!";
+    print $fh $json->pretty->encode($data);
+    close($fh);
+    print "Added MCP server $name to user config\n";
     exit 0;
 }
 

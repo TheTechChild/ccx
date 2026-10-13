@@ -110,7 +110,7 @@ _ccx() {
             return 0
             ;;
         ccx__subcmd__manage__subcmd__add)
-            opts="-y -h --dir --email --no-login --yes --help"
+            opts="-y -h --dir --email --no-login --no-prefs --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -244,7 +244,7 @@ _ccx() {
             return 0
             ;;
         ccx__subcmd__manage__subcmd__sync)
-            opts="-h --all --dry-run --force --help"
+            opts="-h --all --dry-run --force --prefs --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

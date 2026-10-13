@@ -4,7 +4,7 @@ ccx is a command-line tool. It starts Claude Code on the account that has the mo
 
 ccx is for a person who has more than one Claude Code account, for example a personal Max account and a work account. Each account has its own configuration directory. ccx reads the usage of each account and starts `claude` on the account that has the most capacity available. You can also name the account.
 
-> **Status:** Version 0.1.0. `ccx @name`, automatic selection, `ccx status`, `ccx usage refresh`, `ccx manage adopt`, `ccx manage add`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync`, `ccx manage doctor`, `ccx manage service`, `ccx handoff` and the automatic handoff on `ccx -c` and `ccx --resume <id>` are available. Refer to [PLAN.md](PLAN.md) for the plan.
+> **Status:** Version 0.1.0. `ccx @name`, automatic selection, `ccx status`, `ccx usage refresh`, `ccx manage adopt`, `ccx manage add`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync` (also `--prefs`), `ccx manage doctor`, `ccx manage service`, `ccx handoff` and the automatic handoff on `ccx -c` and `ccx --resume <id>` are available. Refer to [PLAN.md](PLAN.md) for the plan.
 
 ## Credential policy
 
@@ -155,6 +155,7 @@ ccx manage add work                            # Show the plan, then ask for con
 ccx manage add work --email user@example.com   # Give the email to `claude auth login`.
 ccx manage add work --dir ~/accounts/work      # Use a different directory.
 ccx manage add work --no-login                 # Do not log in.
+ccx manage add work --no-prefs                 # Do not copy the MCP servers and the preferences.
 ccx manage add work -y                         # Do not ask. Use this in scripts.
 ```
 
@@ -169,6 +170,7 @@ After you confirm, add does these steps:
 5. It adds the account (the name and the directory) to `config.toml`. `config.toml` gets no email addresses.
 6. It writes the email only to `config.local.toml`, with mode 0600.
 7. It shows the kind, the tier and the weight that automatic selection uses, for example `work: kind max, tier Max 5x, weight 5`. An unknown tier shows the raw value.
+8. It copies the user MCP servers and the allowlisted preferences of the base account into the new account, as `ccx manage sync --prefs` does. With `--no-prefs` or `--no-login`, add does not do this step. If this step fails, add shows a warning. Run `ccx manage sync --prefs NAME` to try again.
 
 Add keeps the other entries and the comments in the two files. It writes each file to a temporary file and then renames it. Add never reads or keeps the Claude Code credentials. Only `claude auth login` touches them.
 
@@ -245,6 +247,41 @@ own = ["statusline.py", "skills/tdd"]   # Optional. Sync shows these items as SK
 ```
 
 > **Known risk:** `plugins/` is one link, so `plugins/synced` is shared by all accounts. To keep `plugins/` separate, put `"plugins"` in `own`.
+
+### Copy MCP servers and preferences
+
+Links cannot share the user MCP servers and the user preferences, because they are in the `.claude.json` file of each account. `ccx manage sync --prefs` copies them from the base `~/.claude.json` into the other accounts. It does not make links.
+
+```sh
+ccx manage sync --prefs angel2             # Copy into one account.
+ccx manage sync --prefs --all              # Copy into all accounts other than the base account.
+ccx manage sync --prefs angel2 --dry-run   # Show the plan. Change nothing.
+```
+
+The plan shows names only, never values:
+
+| Action | Meaning |
+|---|---|
+| `ADD` | The account does not have this MCP server. ccx adds it with `claude mcp add-json -s user`. |
+| `SKIP` | The account has an MCP server with this name. ccx does not change or remove it. |
+| `SET` | ccx writes the base value of this preference key. |
+| `OK` | The account has the same value. |
+
+ccx adds MCP servers only through `claude mcp add-json -s user <name> '<json>'`, with `CLAUDE_CONFIG_DIR` set to the account directory. ccx never writes `mcpServers` itself.
+
+ccx copies only the keys in the allowlist, and only when the key is in the base file. It writes the account `.claude.json` to a temporary file and then renames it. All other keys stay the same. The built-in allowlist is `theme`, `editorMode`, `verbose`, `autoCompactEnabled`, `preferredNotifChannel`, `autoUpdates`, `diffSidebarOpen`, `deepLinkTerminal`, `claudeInChromeDefaultEnabled`, `hasCompletedOnboarding` and `lastOnboardingVersion`. The onboarding keys prevent a second onboarding in the new account. To change the allowlist, use `[prefs]` in `config.toml`:
+
+```toml
+[prefs]
+allow = ["someKey"]   # Add keys to the allowlist.
+deny = ["verbose"]    # Remove keys from the allowlist.
+```
+
+ccx never copies some keys, also when `allow` names them: `oauthAccount`, `userID`, `machineID`, `mcpServers`, `projects`, and the keys for caches, counters, usage data and migration state (for example `cached*`, `*Cache`, `*Count`, `numStartups`, `firstStartTime`, `skillUsage`, `pluginUsage`, `tip*`, `migrationVersion`, `*MigrationComplete` and `bridgeOauth*`).
+
+ccx does not change an account that has a running session. It reads the `sessions/<pid>.json` files of the account. A session is running when its `pid` is a live process and the start time of the process agrees with `procStart`. A file with a dead pid does not stop the copy. ccx never reads the `sessions/*.key` files. When a session is running, stop it and run the command again. The exit code is 1 when ccx did not change an account or an MCP server add failed.
+
+After the copy, ccx shows `MCP servers that need re-auth: ...`. These are the new `http` and `sse` servers that use OAuth. ccx finds them from the server config only. ccx never reads or copies MCP OAuth tokens. To log in to these servers, run `/mcp` in the account, for example in `ccx @angel2`.
 
 ### Check the setup with doctor
 
@@ -394,6 +431,10 @@ stickiness = 10            # Points within the best score that keep the last acc
 fresh_minutes = 15         # Usage data that is less old than this is fresh.
 fetch_timeout_secs = 5     # The time limit of the blocking fetch of a launch.
 refresh_min_gap_secs = 60  # The minimum time between two background refreshes.
+
+[prefs]                    # Optional. Changes to the allowlist of `ccx manage sync --prefs`.
+allow = []                 # Keys to copy also.
+deny = []                  # Keys not to copy.
 ```
 
 Put email addresses only in the overlay file `config.local.toml`. ccx reads it from `$XDG_CONFIG_HOME/ccx/`, or from `~/.config/ccx/`. ccx merges the overlay over `config.toml`. Do not commit the overlay. Give it mode 0600.
