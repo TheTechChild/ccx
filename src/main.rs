@@ -5,6 +5,7 @@ mod env;
 mod launch;
 mod list;
 mod paths;
+mod pick;
 mod shell_init;
 mod status;
 mod sync;
@@ -209,17 +210,27 @@ fn run_launch(
     let parent = Env::from_process();
     let depth = launch::check_depth(&parent)?;
     let config = config::load(&parent)?;
+    let show = pick::show_messages(
+        std::io::stdout().is_terminal(),
+        std::io::stderr().is_terminal(),
+        &args,
+    );
+    let mut auto = None;
     let account = match launch::pick_account(&config, name, subcommand, &parent)? {
         Pick::Named(account) => account,
         Pick::Base(account) => {
             if let Some(word) = subcommand
-                && std::io::stderr().is_terminal()
+                && show
             {
                 eprintln!("{}", launch::base_note(word, account));
             }
             account
         }
-        Pick::Auto => auto_select(&config),
+        Pick::Auto => {
+            let (account, picked) = auto_select(&config, &parent, &args)?;
+            auto = picked;
+            account
+        }
     };
     let (env, removed) = launch::build_env(&parent, account, depth);
     let self_exe = std::env::current_exe().ok();
@@ -229,14 +240,20 @@ fn run_launch(
         self_exe.as_deref(),
     );
 
-    // Banner and warnings only on a terminal, so pipes stay clean.
-    let tty = std::io::stdout().is_terminal() && std::io::stderr().is_terminal();
-    if tty {
+    // Banner and warnings only on a terminal and not for `-p`, so pipes
+    // and scripts stay clean.
+    if show {
         for key in &removed {
             eprintln!("ccx: warning: removed {key}; it overrides the account login");
         }
+        if let Some(warning) = auto.as_ref().and_then(|a| a.warning.as_ref()) {
+            eprintln!("{warning}");
+        }
         if config.launch.banner {
-            eprintln!("ccx: account {} ({})", account.name, account.dir.display());
+            match &auto {
+                Some(auto) => eprintln!("{}", auto.banner),
+                None => eprintln!("ccx: account {} ({})", account.name, account.dir.display()),
+            }
         }
     }
 
@@ -246,12 +263,19 @@ fn run_launch(
         return Ok(ExitCode::SUCCESS);
     }
 
+    if let Some(auto) = &auto
+        && let Err(e) = pick::write_state(&auto.state_path, &auto.state)
+        && show
+    {
+        eprintln!("ccx: warning: {e}");
+    }
+
     // Add missing links, for example a new skill. Never change a conflict.
     match sync::health_check(config.base(), account) {
         Ok(0) => {}
-        Ok(n) if tty => eprintln!("ccx: sync added {n} missing links in {}", account.name),
+        Ok(n) if show => eprintln!("ccx: sync added {n} missing links in {}", account.name),
         Ok(_) => {}
-        Err(e) if tty => eprintln!("ccx: warning: sync check: {e}"),
+        Err(e) if show => eprintln!("ccx: warning: sync check: {e}"),
         Err(_) => {}
     }
 
@@ -268,11 +292,60 @@ fn run_launch(
     Ok(ExitCode::from(EXIT_EXEC_FAILED))
 }
 
+/// The result of an automatic pick: the messages and the state to write.
+struct Auto {
+    banner: String,
+    warning: Option<String>,
+    state_path: std::path::PathBuf,
+    state: pick::State,
+}
+
 /// Automatic selection for a session with no account name. Only
-/// `Pick::Auto` comes here, so claude subcommands never fetch usage.
-/// Automatic selection is not ready yet: use the base account.
-fn auto_select(config: &config::Config) -> &config::Account {
-    config.base()
+/// `Pick::Auto` comes here, so claude subcommands never use the picker.
+/// With no enabled account, ccx uses the base account.
+fn auto_select<'a>(
+    config: &'a config::Config,
+    env: &Env,
+    args: &[OsString],
+) -> config::Result<(&'a config::Account, Option<Auto>)> {
+    let home = config::home(env)?;
+    let now = usage::now_ms();
+    let candidates = pick::candidates(config, home);
+    let state_path = pick::state_path(home);
+    let last = pick::read_state(&state_path).last;
+    let model = pick::model_arg(args);
+    let Some(decision) = pick::pick(
+        &candidates,
+        last.as_deref(),
+        model.as_deref(),
+        &config.pick,
+        now,
+    ) else {
+        return Ok((config.base(), None));
+    };
+    let chosen = &candidates[decision.index];
+    let account = config
+        .account(&chosen.name)
+        .expect("each candidate is a configured account");
+    let warning = match decision.reason {
+        pick::Reason::AllLimited { frees_at_ms } => Some(pick::all_limited_warning(
+            &chosen.name,
+            frees_at_ms,
+            now,
+            pick::local_clock,
+        )),
+        _ => None,
+    };
+    let auto = Auto {
+        banner: pick::banner(chosen, now, pick::local_clock),
+        warning,
+        state_path,
+        state: pick::State {
+            last: Some(chosen.name.clone()),
+            picked_at_ms: Some(now),
+        },
+    };
+    Ok((account, Some(auto)))
 }
 
 #[cfg(test)]

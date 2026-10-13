@@ -91,16 +91,7 @@ impl Row {
 /// here. Unknown usage is not limited. A window that has reset at `now_ms`
 /// is not limited, because its percent is from the last window.
 pub fn limited(usage: Option<&Snapshot>, pick: &Pick, now_ms: u64) -> bool {
-    let Some(usage) = usage else {
-        return false;
-    };
-    let at_or_above = |kind, avoid: u32| {
-        usage
-            .get(kind)
-            .is_some_and(|l| !l.has_reset(now_ms) && l.percent >= f64::from(avoid))
-    };
-    at_or_above(Kind::Session, pick.session_avoid)
-        || at_or_above(Kind::WeeklyAll, pick.weekly_avoid)
+    crate::pick::limited(usage, pick, None, now_ms)
 }
 
 /// 0 when at least one enabled, logged-in account is not limited, 3 when
