@@ -5,6 +5,7 @@
 #   is "main@example.com" when CLAUDE_CONFIG_DIR is not set. Otherwise it is
 #   "<suffix>@example.com", where the dir name is ".claude-<suffix>".
 #   A dir name that contains "loggedout" gives `"loggedIn": false`.
+# - When FAKE_CLAUDE_VERSION is set, `claude --version` prints its value.
 # - All other calls print the program path, the arguments and the
 #   environment as one JSON object, then exit 0.
 # - When FAKE_CLAUDE_LOG is set, each call also appends that JSON object
@@ -24,6 +25,11 @@ if (my $log = $ENV{FAKE_CLAUDE_LOG}) {
     open(my $fh, '>>', $log) or die "cannot open $log: $!";
     print $fh $record, "\n";
     close($fh);
+}
+
+if ("@ARGV" eq "--version" && defined $ENV{FAKE_CLAUDE_VERSION}) {
+    print "$ENV{FAKE_CLAUDE_VERSION}\n";
+    exit 0;
 }
 
 if ("@ARGV" eq "auth status --json") {

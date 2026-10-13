@@ -21,13 +21,23 @@ pub fn canonical(path: &str, home: &OsStr) -> PathBuf {
     }
 }
 
-fn expand_tilde(path: &str, home: &OsStr) -> PathBuf {
+/// Expands a leading `~` to `home`. It changes nothing else.
+pub fn expand_tilde(path: &str, home: &OsStr) -> PathBuf {
     if path == "~" {
         PathBuf::from(home)
     } else if let Some(rest) = path.strip_prefix("~/") {
         Path::new(home).join(rest)
     } else {
         PathBuf::from(path)
+    }
+}
+
+/// The text of `path` for messages: a path in `home` starts with `~`.
+pub fn tilde(path: &Path, home: &OsStr) -> String {
+    match path.strip_prefix(Path::new(home)) {
+        Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+        Ok(rest) => format!("~/{}", rest.display()),
+        Err(_) => path.display().to_string(),
     }
 }
 
@@ -97,6 +107,15 @@ mod tests {
             canon(decomposed),
             PathBuf::from("/home/test/.claude-caf\u{e9}")
         );
+    }
+
+    #[test]
+    fn tilde_shortens_paths_in_home() {
+        let home = OsStr::new(HOME);
+        assert_eq!(tilde(Path::new("/home/test"), home), "~");
+        assert_eq!(tilde(Path::new("/home/test/.claude"), home), "~/.claude");
+        assert_eq!(tilde(Path::new("/home/tester/x"), home), "/home/tester/x");
+        assert_eq!(tilde(Path::new("/opt/x"), home), "/opt/x");
     }
 
     #[test]

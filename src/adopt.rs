@@ -92,6 +92,7 @@ pub fn run(parent: &Env, yes: bool) -> Result<()> {
             name: name.clone(),
             is_base: dir == base_dir,
             dir,
+            dir_text: found.dir_text.clone(),
             weight: None,
             aliases: Vec::new(),
             enabled: true,

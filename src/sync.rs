@@ -209,7 +209,7 @@ pub fn lstat(path: &Path) -> Result<State> {
 }
 
 /// The names in `dir`, sorted.
-fn names(dir: &Path) -> Result<Vec<std::ffi::OsString>> {
+pub fn names(dir: &Path) -> Result<Vec<std::ffi::OsString>> {
     let error = |e: std::io::Error| format!("cannot read {}: {e}", dir.display());
     let mut names = fs::read_dir(dir)
         .map_err(error)?

@@ -224,7 +224,7 @@ pub fn find_claude(
         .find(|candidate| is_executable(candidate) && !same_file(candidate, self_exe))
 }
 
-fn is_executable(path: &Path) -> bool {
+pub fn is_executable(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
