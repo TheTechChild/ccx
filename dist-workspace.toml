@@ -20,4 +20,4 @@ unix-archive = ".tar.gz"
 # The shell completion files to put in each archive
 include = ["completions/"]
 # A pull request runs `dist plan` to check the release config
-pr-run-mode = "plan"
+pr-run-mode = "upload"
