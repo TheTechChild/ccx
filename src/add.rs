@@ -368,7 +368,7 @@ pub fn info(auth: Option<&Auth>, claude_json: Option<&Value>, weight: Option<f64
 }
 
 /// Checks the edited files with the normal loader. Returns their text.
-fn validate(
+pub fn validate(
     main: &toml_edit::DocumentMut,
     overlay: &toml_edit::DocumentMut,
     main_path: &Path,

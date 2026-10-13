@@ -18,9 +18,10 @@ const FORBIDDEN: [&str; 6] = [
     "keyring::",
 ];
 
-/// The credentials file. Only the sync never-share list can name it.
+/// The credentials file. Only the sync never-share list and the delete
+/// of `rm --purge` can name it.
 const CREDENTIALS_FILE: &str = ".credentials.json";
-const CREDENTIALS_ALLOWED_IN: &str = "sync.rs";
+const CREDENTIALS_ALLOWED_IN: [&str; 2] = ["sync.rs", "lifecycle.rs"];
 
 /// The problems in the non-test part of one source file.
 fn problems(file_name: &str, text: &str) -> Vec<String> {
@@ -33,7 +34,7 @@ fn problems(file_name: &str, text: &str) -> Vec<String> {
                 out.push(format!("{where_}: contains `{pattern}`"));
             }
         }
-        if line.contains(CREDENTIALS_FILE) && file_name != CREDENTIALS_ALLOWED_IN {
+        if line.contains(CREDENTIALS_FILE) && !CREDENTIALS_ALLOWED_IN.contains(&file_name) {
             out.push(format!("{where_}: names `{CREDENTIALS_FILE}`"));
         }
     }
@@ -70,6 +71,36 @@ fn sync_names_the_credentials_file_only_to_never_share_it() {
         // The only use is a string item in a list, with no file call.
         assert_eq!(line.trim(), format!("\"{CREDENTIALS_FILE}\","), "{line}");
     }
+}
+
+/// `rm --purge` (#18) deletes the credentials file and never reads it. In
+/// `src/lifecycle.rs`, the file name is only in one constant, and each use
+/// of the constant is the delete or text for the plan.
+#[test]
+fn lifecycle_only_deletes_the_credentials_file() {
+    let text =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lifecycle.rs")).unwrap();
+    let code = text.split("#[cfg(test)]").next().unwrap();
+    let mut deletes = 0;
+    for line in code.lines() {
+        let line = line.trim();
+        if line.starts_with("//") {
+            continue;
+        }
+        if line.contains(CREDENTIALS_FILE) {
+            assert_eq!(
+                line,
+                format!("const CREDENTIALS_FILE: &str = \"{CREDENTIALS_FILE}\";")
+            );
+        } else if line.contains("CREDENTIALS_FILE") {
+            if line.contains("remove_file(") {
+                deletes += 1;
+            } else {
+                assert!(line.contains("format!("), "{line}");
+            }
+        }
+    }
+    assert_eq!(deletes, 1);
 }
 
 /// The copy of MCP servers and preferences (#17) reads only `.claude.json`
