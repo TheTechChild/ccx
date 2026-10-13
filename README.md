@@ -2,7 +2,40 @@
 
 ccx is a command-line tool. It starts Claude Code on the account that has the most usage available.
 
-> **Status:** Work in progress. ccx starts Claude Code on an account that you name, or on the account that it selects from the usage cache. `ccx manage adopt`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync`, `ccx manage doctor`, `ccx status` and `ccx usage refresh` are available. ccx refreshes the usage cache automatically. Refer to [PLAN.md](PLAN.md) for the plan.
+ccx is for a person who has more than one Claude Code account, for example a personal Max account and a work account. Each account has its own configuration directory. ccx reads the usage of each account and starts `claude` on the account that has the most capacity available. You can also name the account.
+
+> **Status:** Version 0.1.0. `ccx @name`, automatic selection, `ccx status`, `ccx usage refresh`, `ccx manage adopt`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync` and `ccx manage doctor` are available. `ccx handoff` is not ready. Refer to [PLAN.md](PLAN.md) for the plan.
+
+## Credential policy
+
+ccx never reads, stores or refreshes Claude Code credentials. ccx does not read `.credentials.json` or the keychain secrets. All logins go through `claude auth login`. ccx gets the usage data from the `claude` program. Refer to [ADR 0002](docs/adr/0002-no-credential-access.md).
+
+## Install
+
+Install ccx with [mise](https://mise.jdx.dev):
+
+```sh
+mise use -g github:TheTechChild/ccx
+ccx --version
+```
+
+mise downloads the release archive for your system from GitHub and puts `ccx` on `PATH`. The releases are for macOS and Linux, on x86_64 (amd64) and arm64 (aarch64). Each release has a `sha256.sum` file with the checksums of the archives.
+
+You must also have Claude Code (`claude`) on `PATH`.
+
+Each archive also has the static completion files in `completions/`: `_ccx` (zsh), `ccx.bash` and `ccx.fish`. These files do not complete the account names. To get the account names and the aliases, use `ccx manage shell-init` (refer to [Add completions and aliases to your shell](#add-completions-and-aliases-to-your-shell)).
+
+## Quick start
+
+1. Log in to each account with `claude auth login`. The base account uses `~/.claude`. Each other account uses its own directory, for example `CLAUDE_CONFIG_DIR=~/.claude-angel2 claude auth login`.
+2. Add the accounts to the ccx config: `ccx manage adopt`.
+3. Add completions and aliases to your shell profile: `eval "$(ccx manage shell-init zsh)"`. For example, `aliases = ["claude2"]` in account `angel2` gives `alias claude2='ccx @angel2'`.
+4. Start Claude Code:
+   - `ccx` selects the account that has the most capacity available.
+   - `ccx @angel2` starts account `angel2`.
+5. Show the usage of each account: `ccx status`.
+
+The bare `claude` command stays on the base account. ccx never makes an alias for `claude`.
 
 ## Usage
 
@@ -298,6 +331,17 @@ This project uses [mise](https://mise.jdx.dev) for all tools.
 2. Run all checks: `mise run ci`.
 
 The checks are `fmt`, `lint`, `test` and `check-emails`. You can run each check with `mise run <name>`.
+
+The completion files in `completions/` come from the CLI definition. A test fails when they do not agree with the CLI. To update them, run `CCX_UPDATE_GOLDEN=1 mise run test` and check the diff.
+
+### Make a release
+
+[cargo-dist](https://opensource.axo.dev/cargo-dist/) makes the release. The config is in `dist-workspace.toml`. The workflow is `.github/workflows/release.yml`. Do not edit the workflow by hand. Change `dist-workspace.toml` and run `mise exec -- dist generate`.
+
+1. Make sure that `version` in `Cargo.toml` is the new version, and that CI is green on `main`.
+2. Make sure that the plan is correct: `mise exec -- dist plan`.
+3. Push a tag for the version, for example `git tag v0.1.0 && git push origin v0.1.0`.
+4. The release workflow builds the archives for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu`, and makes the GitHub release with the archives and `sha256.sum`.
 
 ## Privacy rule
 

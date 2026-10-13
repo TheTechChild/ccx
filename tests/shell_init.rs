@@ -405,3 +405,70 @@ fn fish_alias_runs_ccx_at_angel2() {
         );
     }
 }
+
+// The static completion files in `completions/`, which the release archives
+// include. They have no `@name` tokens, because the archive has no config.
+
+fn completion_file(name: &str) -> String {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("completions")
+        .join(name)
+        .display()
+        .to_string()
+}
+
+#[test]
+fn archive_bash_completion_file_completes_commands() {
+    let Some(bash) = find_shell("bash") else {
+        return;
+    };
+    let fixture = Fixture::without_config();
+    let script = format!(
+        "source '{}'\n\
+         COMP_WORDS=(ccx ''); COMP_CWORD=1\n\
+         COMP_LINE='ccx '; COMP_POINT=${{#COMP_LINE}}\n\
+         _ccx ccx '' ccx\n\
+         printf '%s\\n' \"${{COMPREPLY[@]}}\"\n",
+        completion_file("ccx.bash")
+    );
+    let out = run_shell(&fixture, &bash, &script);
+    for word in ["manage", "status", "usage", "handoff"] {
+        assert!(out.lines().any(|l| l == word), "bash lacks {word}:\n{out}");
+    }
+}
+
+#[test]
+fn archive_zsh_completion_file_loads_from_fpath() {
+    let Some(zsh) = find_shell("zsh") else { return };
+    let fixture = Fixture::without_config();
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("completions");
+    let script = format!(
+        "fpath=('{}' $fpath)\n\
+         autoload -Uz compinit && compinit -u -d \"$HOME/.zcompdump\"\n\
+         print -r -- \"$_comps[ccx]\"\n",
+        dir.display()
+    );
+    let out = run_shell(&fixture, &zsh, &script);
+    assert_eq!(out, "_ccx\n");
+}
+
+#[test]
+fn archive_fish_completion_file_completes_commands() {
+    let Some(fish) = find_shell("fish") else {
+        return;
+    };
+    let fixture = Fixture::without_config();
+    let script = format!(
+        "source '{}'\n\
+         complete -C 'ccx '\n\
+         complete -C 'ccx manage '\n",
+        completion_file("ccx.fish")
+    );
+    let out = run_shell(&fixture, &fish, &script);
+    for word in ["manage", "status", "adopt", "shell-init"] {
+        assert!(
+            out.lines().any(|l| l.split('\t').next() == Some(word)),
+            "fish lacks {word}:\n{out}"
+        );
+    }
+}

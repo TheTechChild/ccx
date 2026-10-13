@@ -140,6 +140,34 @@ fn completions(shell: Shell, cli: Command, names: &[&str]) -> String {
                 .disable_help_flag(true),
         );
     }
+    let text = generate(shell, cmd);
+    match shell {
+        Shell::Zsh => zsh_guard(&text),
+        _ => text,
+    }
+}
+
+/// The static completion file for the release archive: the plain clap
+/// output with no `@name` tokens, because the archive has no config. The
+/// zsh file has no `compdef` guard, because zsh loads it from `fpath`.
+/// A test writes and checks these files.
+#[cfg(test)]
+pub fn completion_file(shell: Shell, cli: Command) -> String {
+    generate(shell, cli)
+}
+
+/// The file name of the completion file for `shell` in `completions/`.
+#[cfg(test)]
+pub fn completion_file_name(shell: Shell) -> &'static str {
+    match shell {
+        Shell::Zsh => "_ccx",
+        Shell::Bash => "ccx.bash",
+        Shell::Fish => "ccx.fish",
+    }
+}
+
+/// The clap completion script for `cmd`.
+fn generate(shell: Shell, mut cmd: Command) -> String {
     let generator = match shell {
         Shell::Zsh => Generator::Zsh,
         Shell::Bash => Generator::Bash,
@@ -147,11 +175,7 @@ fn completions(shell: Shell, cli: Command, names: &[&str]) -> String {
     };
     let mut buf = Vec::new();
     clap_complete::generate(generator, &mut cmd, "ccx", &mut buf);
-    let text = String::from_utf8(buf).expect("clap_complete writes UTF-8");
-    match shell {
-        Shell::Zsh => zsh_guard(&text),
-        _ => text,
-    }
+    String::from_utf8(buf).expect("clap_complete writes UTF-8")
 }
 
 /// The zsh completion file calls `compdef`, which exists only after
