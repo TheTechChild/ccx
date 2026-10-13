@@ -473,8 +473,9 @@ fn account_items(accounts: &[&Account]) -> Vec<String> {
         .collect()
 }
 
-/// `ccx manage edit` with no name on a terminal: the edit wizard.
-pub fn edit_wizard(parent: &Env, p: &mut dyn Prompt) -> Step<()> {
+/// `ccx manage edit` with no name on a terminal: the edit wizard. The
+/// fields of `given` (from the flags) are the defaults of the steps.
+pub fn edit_wizard(parent: &Env, p: &mut dyn Prompt, given: &Edit) -> Step<()> {
     let setup = Setup::load(parent)?;
     let overlay = adopt::read_doc(&setup.overlay_path)?;
     let accounts: Vec<&Account> = setup.config.accounts.iter().collect();
@@ -482,7 +483,7 @@ pub fn edit_wizard(parent: &Env, p: &mut dyn Prompt) -> Step<()> {
     let index = p.select("The account to change", &account_items(&accounts), 0)?;
     let account = accounts[index];
     let email = adopt::email_of(&overlay, &account.name);
-    let edit = ask_edit(p, account, email)?;
+    let edit = ask_edit(p, account, email, given)?;
     if edit.email.is_none() && edit.weight.is_none() && edit.enabled.is_none() {
         p.show("No change.");
         return Ok(());
@@ -498,9 +499,15 @@ pub fn edit_wizard(parent: &Env, p: &mut dyn Prompt) -> Step<()> {
     self::edit(parent, &account.name, &edit).map_err(Stop::Fail)
 }
 
-/// The steps of the edit wizard. Each step shows the current value as the
-/// default. Returns only the fields that change, the same as the flags.
-pub fn ask_edit(p: &mut dyn Prompt, account: &Account, email: Option<&str>) -> Step<Edit> {
+/// The steps of the edit wizard. The default of each step is the value in
+/// `given` (from the flags), else the current value. Returns only the
+/// fields that change, the same as the flags.
+pub fn ask_edit(
+    p: &mut dyn Prompt,
+    account: &Account,
+    email: Option<&str>,
+    given: &Edit,
+) -> Step<Edit> {
     p.show(&format!(
         "Account {}: dir {}, email {}, weight {}, enabled {}",
         account.name,
@@ -512,8 +519,8 @@ pub fn ask_edit(p: &mut dyn Prompt, account: &Account, email: Option<&str>) -> S
         account.enabled
     ));
     let new_email = p.text(
-        "Step 1 of 3: the expected email (empty for no change)",
-        email,
+        "Step 1 of 3: the expected email (an empty answer keeps the default)",
+        given.email.as_deref().or(email),
         &|text| {
             if text.is_empty() || valid_email(text) {
                 Ok(())
@@ -522,9 +529,9 @@ pub fn ask_edit(p: &mut dyn Prompt, account: &Account, email: Option<&str>) -> S
             }
         },
     )?;
-    let weight_text = account.weight.map(|w| w.to_string());
+    let weight_text = given.weight.or(account.weight).map(|w| w.to_string());
     let new_weight = p.text(
-        "Step 2 of 3: the weight (empty for the tier weight)",
+        "Step 2 of 3: the weight (an empty answer keeps the default)",
         weight_text.as_deref(),
         &|text| match text {
             "" => Ok(()),
@@ -536,7 +543,7 @@ pub fn ask_edit(p: &mut dyn Prompt, account: &Account, email: Option<&str>) -> S
     )?;
     let enabled = p.confirm(
         "Step 3 of 3: use the account for automatic selection?",
-        account.enabled,
+        given.enabled.unwrap_or(account.enabled),
     )?;
     let weight = new_weight.parse::<f64>().ok();
     Ok(Edit {
@@ -1042,7 +1049,7 @@ stickiness = 5
             Reply::Text("5"),
             Reply::No,
         ]);
-        let got = ask_edit(&mut p, work, None).unwrap();
+        let got = ask_edit(&mut p, work, None, &Edit::default()).unwrap();
         assert!(p.done());
         let log = p.text_log();
         assert!(log.contains("Account work: dir ~/.claude-work, email -, weight 2, enabled true"));
@@ -1067,8 +1074,47 @@ stickiness = 5
         );
         // The defaults are the current values: no change.
         let mut p = Script::new([Reply::Text(""), Reply::Text(""), Reply::Yes]);
-        let got = ask_edit(&mut p, work, Some("w@example.com")).unwrap();
+        let got = ask_edit(&mut p, work, Some("w@example.com"), &Edit::default()).unwrap();
         assert_eq!(got, Edit::default());
+    }
+
+    #[test]
+    fn edit_wizard_takes_the_given_flags_as_defaults() {
+        let config = parsed("/home/test");
+        let work = config.account("work").unwrap();
+        // `ccx manage edit --email n@example.com --weight 5 --disable`, then
+        // Enter at each step.
+        let given = Edit {
+            email: Some("n@example.com".into()),
+            weight: Some(5.0),
+            enabled: Some(false),
+        };
+        let mut p = Script::new([Reply::Text(""), Reply::Text(""), Reply::Enter]);
+        let got = ask_edit(&mut p, work, Some("w@example.com"), &given).unwrap();
+        assert!(p.done());
+        assert_eq!(got, given);
+        // A flag that gives the current value is no change.
+        let given = Edit {
+            weight: Some(2.0),
+            ..Edit::default()
+        };
+        let mut p = Script::new([Reply::Text(""), Reply::Text(""), Reply::Enter]);
+        assert_eq!(ask_edit(&mut p, work, None, &given), Ok(Edit::default()));
+        // The user can change a default that came from a flag.
+        let given = Edit {
+            weight: Some(5.0),
+            enabled: Some(false),
+            ..Edit::default()
+        };
+        let mut p = Script::new([Reply::Text(""), Reply::Text("3"), Reply::Yes]);
+        let got = ask_edit(&mut p, work, None, &given).unwrap();
+        assert_eq!(
+            got,
+            Edit {
+                weight: Some(3.0),
+                ..Edit::default()
+            }
+        );
     }
 
     /// End to end: the rm wizard with a purge and the fake claude.

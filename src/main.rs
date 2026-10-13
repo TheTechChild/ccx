@@ -433,9 +433,11 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
                     };
                     match name {
                         Some(name) => lifecycle::edit(&env, &name, &edit)?,
-                        None if wizard::available() => {
-                            wizard::finish(lifecycle::edit_wizard(&env, &mut wizard::Terminal))?
-                        }
+                        None if wizard::available() => wizard::finish(lifecycle::edit_wizard(
+                            &env,
+                            &mut wizard::Terminal,
+                            &edit,
+                        ))?,
                         None => {
                             return Err(wizard::no_terminal(
                                 "missing the account name NAME",

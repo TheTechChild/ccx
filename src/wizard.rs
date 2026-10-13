@@ -166,6 +166,8 @@ pub mod fake {
         Text(&'static str),
         Yes,
         No,
+        /// Enter on a yes/no or a select: takes the default.
+        Enter,
         /// The index of a select item.
         Pick(usize),
         /// Esc (or Ctrl-C).
@@ -226,8 +228,9 @@ pub mod fake {
             }
         }
 
-        fn confirm(&mut self, prompt: &str, _default: bool) -> Step<bool> {
+        fn confirm(&mut self, prompt: &str, default: bool) -> Step<bool> {
             match self.next(prompt) {
+                Reply::Enter => Ok(default),
                 Reply::Yes => Ok(true),
                 Reply::No => Ok(false),
                 Reply::Esc => Err(Stop::Cancel),
@@ -235,8 +238,9 @@ pub mod fake {
             }
         }
 
-        fn select(&mut self, prompt: &str, items: &[String], _default: usize) -> Step<usize> {
+        fn select(&mut self, prompt: &str, items: &[String], default: usize) -> Step<usize> {
             match self.next(prompt) {
+                Reply::Enter => Ok(default),
                 Reply::Pick(i) if i < items.len() => Ok(i),
                 Reply::Esc => Err(Stop::Cancel),
                 other => panic!("`{prompt}` wants one of {items:?}, not {other:?}"),
