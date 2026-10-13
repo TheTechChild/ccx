@@ -6,6 +6,7 @@ mod launch;
 mod list;
 mod paths;
 mod pick;
+mod refresh;
 mod shell_init;
 mod status;
 mod sync;
@@ -130,6 +131,10 @@ enum UsageCommand {
         /// Refresh all enabled accounts.
         #[arg(long, conflicts_with = "name")]
         all: bool,
+        /// Run as the detached background refresh: no output, no wait for
+        /// the lock and the `usage.refresh_min_gap_secs` rule.
+        #[arg(long, hide = true, requires = "all")]
+        background: bool,
     },
 }
 
@@ -188,9 +193,14 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
             return Ok(ExitCode::from(status::run(&Env::from_process(), json)?));
         }
         Own::Usage {
-            command: UsageCommand::Refresh { name, all: _ },
+            command:
+                UsageCommand::Refresh {
+                    name,
+                    all: _,
+                    background,
+                },
         } => {
-            let ok = status::refresh(&Env::from_process(), name.as_deref())?;
+            let ok = status::refresh(&Env::from_process(), name.as_deref(), background)?;
             return Ok(if ok {
                 ExitCode::SUCCESS
             } else {
@@ -215,6 +225,12 @@ fn run_launch(
         std::io::stderr().is_terminal(),
         &args,
     );
+    let self_exe = std::env::current_exe().ok();
+    let claude = launch::find_claude(
+        config.launch.claude_bin.as_deref(),
+        &parent,
+        self_exe.as_deref(),
+    );
     let mut auto = None;
     let account = match launch::pick_account(&config, name, subcommand, &parent)? {
         Pick::Named(account) => account,
@@ -227,18 +243,12 @@ fn run_launch(
             account
         }
         Pick::Auto => {
-            let (account, picked) = auto_select(&config, &parent, &args)?;
+            let (account, picked) = auto_select(&config, &parent, &args, claude.as_deref(), depth)?;
             auto = picked;
             account
         }
     };
     let (env, removed) = launch::build_env(&parent, account, depth);
-    let self_exe = std::env::current_exe().ok();
-    let claude = launch::find_claude(
-        config.launch.claude_bin.as_deref(),
-        &parent,
-        self_exe.as_deref(),
-    );
 
     // Banner and warnings only on a terminal and not for `-p`, so pipes
     // and scripts stay clean.
@@ -283,6 +293,16 @@ fn run_launch(
         eprintln!("ccx: cannot find claude; set launch.claude_bin or CCX_CLAUDE_BIN");
         return Ok(ExitCode::from(EXIT_EXEC_FAILED));
     };
+    // Stale-while-revalidate: refresh the usage cache for the next launch.
+    // The refresh outlives the exec. A failure never stops the launch.
+    if auto.is_some()
+        && !refresh::disabled(&parent)
+        && let Some(exe) = &self_exe
+        && let Err(e) = refresh::spawn_background(exe)
+        && show
+    {
+        eprintln!("ccx: warning: cannot start the usage refresh: {e}");
+    }
     let error = Command::new(&claude)
         .args(&args)
         .env_clear()
@@ -303,14 +323,37 @@ struct Auto {
 /// Automatic selection for a session with no account name. Only
 /// `Pick::Auto` comes here, so claude subcommands never use the picker.
 /// With no enabled account, ccx uses the base account.
+///
+/// When the usage data of an account is `usage.fresh_minutes` old or more,
+/// or missing, ccx first runs a blocking fetch for that account (#11).
 fn auto_select<'a>(
     config: &'a config::Config,
     env: &Env,
     args: &[OsString],
+    claude: Option<&std::path::Path>,
+    depth: u32,
 ) -> config::Result<(&'a config::Account, Option<Auto>)> {
     let home = config::home(env)?;
+    let mut candidates = pick::candidates(config, home);
+    if let Some(claude) = claude
+        && !refresh::disabled(env)
+    {
+        let now = usage::now_ms();
+        let stale: Vec<&config::Account> = candidates
+            .iter()
+            .filter(|c| {
+                c.usage.as_ref().is_none_or(|u| {
+                    !refresh::is_fresh(u.fetched_at_ms, now, config.usage.fresh_minutes)
+                })
+            })
+            .filter_map(|c| config.account(&c.name))
+            .collect();
+        if !stale.is_empty() {
+            refresh::blocking(config, &stale, claude, env, home, depth);
+            candidates = pick::candidates(config, home);
+        }
+    }
     let now = usage::now_ms();
-    let candidates = pick::candidates(config, home);
     let state_path = pick::state_path(home);
     let last = pick::read_state(&state_path).last;
     let model = pick::model_arg(args);

@@ -110,6 +110,7 @@ _arguments "${_arguments_options[@]}" : \
             (refresh)
 _arguments "${_arguments_options[@]}" : \
 '()--all[Refresh all enabled accounts]' \
+'--background[Run as the detached background refresh\: no output, no wait for the lock and the \`usage.refresh_min_gap_secs\` rule]' \
 '-h[Print help]' \
 '--help[Print help]' \
 '::name -- The account to refresh:_default' \

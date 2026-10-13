@@ -11,6 +11,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -252,7 +253,11 @@ pub fn write_private(path: &Path, text: &[u8]) -> Result<()> {
     let dir = path.parent().expect("a state path has a parent");
     make_private_dir(dir).map_err(error)?;
     let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let temp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    // The process id and a counter make the temp name unique, so that two
+    // writers never share a temp file.
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temp = dir.join(format!(".{name}.{}.{count}.tmp", std::process::id()));
     let written = (|| {
         let mut file = OpenOptions::new()
             .write(true)
@@ -582,6 +587,39 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(names, ["angel2.json"]);
+    }
+
+    #[test]
+    fn a_reader_never_sees_a_partial_cache_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = cache_path(dir.path().as_os_str(), "main");
+        let big = |n: u64| Snapshot {
+            source: Source::Usage,
+            fetched_at_ms: n,
+            limits: (0..200)
+                .map(|i| Limit {
+                    kind: Kind::WeeklyScoped,
+                    percent: i as f64,
+                    resets_at: Some("2026-01-04T06:00:00.000000+00:00".into()),
+                    scope: Some(format!("Model{i}")),
+                })
+                .collect(),
+        };
+        write_cache(&path, &big(0)).unwrap();
+        std::thread::scope(|scope| {
+            for writer in 0..2u64 {
+                let path = &path;
+                scope.spawn(move || {
+                    for n in 0..100 {
+                        write_cache(path, &big(writer * 1000 + n)).unwrap();
+                    }
+                });
+            }
+            for _ in 0..300 {
+                let snapshot = read_cache(&path).expect("a complete file");
+                assert_eq!(snapshot.limits.len(), 200);
+            }
+        });
     }
 
     #[test]

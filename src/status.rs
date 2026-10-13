@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use crate::config::{self, Account, Config, Pick, Result};
 use crate::env::Env;
 use crate::launch;
+use crate::refresh;
 use crate::usage::{self, Kind, Limit, Snapshot};
 
 /// The exit code when all logged-in accounts are limited.
@@ -118,6 +119,23 @@ pub fn run(env: &Env, as_json: bool) -> Result<u8> {
     let claude = find_claude(&config, env);
     let timeout = Duration::from_secs(config.usage.fetch_timeout_secs);
     let fresh_ms = config.usage.fresh_minutes * 60_000;
+    // All fetches use the refresh lock. Status waits for the lock only when
+    // a cache entry is old or missing. After the wait, `gather` reads the
+    // cache again.
+    let now = usage::now_ms();
+    let stale = config.accounts.iter().any(|a| {
+        usage::read_cache(&usage::cache_path(home, &a.name))
+            .is_none_or(|s| !refresh::is_fresh(s.fetched_at_ms, now, config.usage.fresh_minutes))
+    });
+    let lock = if stale && claude.is_some() {
+        let lock = refresh::lock_wait(home).ok();
+        if lock.is_some() {
+            let _ = refresh::record_start(home, usage::now_ms());
+        }
+        lock
+    } else {
+        None
+    };
     let rows: Vec<Row> = std::thread::scope(|scope| {
         let handles: Vec<_> = config
             .accounts
@@ -135,6 +153,7 @@ pub fn run(env: &Env, as_json: bool) -> Result<u8> {
             .map(|h| h.join().expect("a status thread does not panic"))
             .collect()
     });
+    drop(lock);
 
     if std::io::stderr().is_terminal() {
         if claude.is_none() {
@@ -226,7 +245,12 @@ fn auth_status(claude: &Path, env: &Env, home: &OsStr, timeout: Duration) -> Opt
 
 /// `ccx usage refresh NAME` or `ccx usage refresh --all` (all enabled
 /// accounts). Returns false when a fetch or a cache write fails.
-pub fn refresh(env: &Env, name: Option<&str>) -> Result<bool> {
+///
+/// A manual refresh waits for the refresh lock and always runs the fetch.
+/// A background refresh (`background`) writes no output. It exits with no
+/// fetch when a different process holds the lock, or when the last fetch
+/// started less than `usage.refresh_min_gap_secs` ago.
+pub fn refresh(env: &Env, name: Option<&str>, background: bool) -> Result<bool> {
     let config = config::load(env)?;
     let home = config::home(env)?;
     let depth = launch::check_depth(env)?;
@@ -241,33 +265,45 @@ pub fn refresh(env: &Env, name: Option<&str>) -> Result<bool> {
     };
     let claude = find_claude(&config, env)
         .ok_or("cannot find claude; set launch.claude_bin or CCX_CLAUDE_BIN")?;
+    let gap = config.usage.refresh_min_gap_secs;
+    let _lock = if background {
+        // Check the gap before the lock, so that a refresh that has no
+        // work to do makes no file.
+        if !refresh::gap_passed(refresh::last_start(home), usage::now_ms(), gap) {
+            return Ok(true);
+        }
+        let Some(lock) = refresh::try_lock(home)? else {
+            return Ok(true);
+        };
+        // A different process can finish a fetch between the two checks.
+        if !refresh::gap_passed(refresh::last_start(home), usage::now_ms(), gap) {
+            return Ok(true);
+        }
+        lock
+    } else {
+        match refresh::try_lock(home)? {
+            Some(lock) => lock,
+            None => {
+                if std::io::stderr().is_terminal() {
+                    eprintln!("ccx: a different usage refresh runs; waiting for it");
+                }
+                refresh::lock_wait(home)?
+            }
+        }
+    };
+    refresh::record_start(home, usage::now_ms())?;
     let timeout = REFRESH_TIMEOUT.max(Duration::from_secs(config.usage.fetch_timeout_secs));
-    let results: Vec<Result<Snapshot>> = std::thread::scope(|scope| {
-        let handles: Vec<_> = accounts
-            .iter()
-            .map(|account| {
-                let claude = claude.as_path();
-                scope.spawn(move || {
-                    let (account_env, _) = launch::build_env(env, account, depth);
-                    let snapshot = usage::fetch(claude, &account_env, home, timeout)?;
-                    usage::write_cache(&usage::cache_path(home, &account.name), &snapshot)?;
-                    Ok(snapshot)
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| h.join().expect("a refresh thread does not panic"))
-            .collect()
-    });
+    let results = refresh::fetch_all(&accounts, &claude, env, home, depth, timeout);
     let mut all_ok = true;
     for (account, result) in accounts.iter().zip(results) {
         match result {
+            Ok(_) if background => {}
             Ok(snapshot) => println!(
                 "{}: ok ({} usage windows)",
                 account.name,
                 snapshot.limits.len()
             ),
+            Err(_) if background => all_ok = false,
             Err(error) => {
                 all_ok = false;
                 eprintln!("ccx: {}: usage fetch: {error}", account.name);
