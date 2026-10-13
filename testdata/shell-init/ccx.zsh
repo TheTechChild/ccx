@@ -88,17 +88,36 @@ esac
 ;;
 (status)
 _arguments "${_arguments_options[@]}" : \
-'-h[Print help]' \
-'--help[Print help]' \
-'*::args:_default' \
+'--json[Print stable JSON]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (usage)
 _arguments "${_arguments_options[@]}" : \
 '-h[Print help]' \
 '--help[Print help]' \
-'*::args:_default' \
+":: :_ccx__subcmd__usage_commands" \
+"*::: :->usage" \
 && ret=0
+
+    case $state in
+    (usage)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:ccx-usage-command-$line[1]:"
+        case $line[1] in
+            (refresh)
+_arguments "${_arguments_options[@]}" : \
+'()--all[Refresh all enabled accounts]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::name -- The account to refresh:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
 ;;
 (handoff)
 _arguments "${_arguments_options[@]}" : \
@@ -128,8 +147,8 @@ esac
 _ccx_commands() {
     local commands; commands=(
 'manage:Manage accounts' \
-'status:Show the usage of each account (not ready yet)' \
-'usage:Fetch and show usage (not ready yet)' \
+'status:Show the kind, tier and usage of each account' \
+'usage:Fetch usage and write the usage cache' \
 'handoff:Move a session to a different account (not ready yet)' \
 '@angel2:Start claude as account angel2' \
 '@lab:Start claude as account lab' \
@@ -200,8 +219,15 @@ _ccx__subcmd__status_commands() {
 }
 (( $+functions[_ccx__subcmd__usage_commands] )) ||
 _ccx__subcmd__usage_commands() {
-    local commands; commands=()
+    local commands; commands=(
+'refresh:Run the \`/usage\` fetch and write \`~/.local/state/ccx/usage/<name>.json\`' \
+    )
     _describe -t commands 'ccx usage commands' commands "$@"
+}
+(( $+functions[_ccx__subcmd__usage__subcmd__refresh_commands] )) ||
+_ccx__subcmd__usage__subcmd__refresh_commands() {
+    local commands; commands=()
+    _describe -t commands 'ccx usage refresh commands' commands "$@"
 }
 
 if [ "$funcstack[1]" = "_ccx" ]; then

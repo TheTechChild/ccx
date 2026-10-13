@@ -2,7 +2,7 @@
 
 ccx is a command-line tool. It starts Claude Code on the account that has the most usage available.
 
-> **Status:** Work in progress. ccx starts Claude Code on an account that you name. `ccx manage adopt`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync` and `ccx manage doctor` are available. Automatic selection is not available yet. Refer to [PLAN.md](PLAN.md) for the plan.
+> **Status:** Work in progress. ccx starts Claude Code on an account that you name. `ccx manage adopt`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync`, `ccx manage doctor`, `ccx status` and `ccx usage refresh` are available. Automatic selection is not available yet. Refer to [PLAN.md](PLAN.md) for the plan.
 
 ## Usage
 
@@ -142,6 +142,61 @@ ccx manage doctor --json   # Show the results as JSON for scripts.
 | `keychain` | macOS only. Keychain items `Claude Code-credentials-*` that agree with no account directory. Doctor reads only the item names, never the secret values. |
 
 The exit code is 0 when all checks pass, 1 when there is a `WARN` and 2 when there is a `FAIL`.
+
+## Usage data
+
+### Show the status of each account
+
+```sh
+ccx status          # One row for each account.
+ccx status --json   # The same data as stable JSON.
+```
+
+```text
+NAME    EMAIL             KIND  TIER     SESSION      WEEKLY      SCOPED                   SOURCE  AGE
+angel2  work@example.com  max   Max 5x   1% (4h08m)   0% (6d6h)   ExampleModel 0% (6d6h)   /usage  0s
+main    -                 max   Max 20x  11% (2h48m)  21% (3d2h)  ExampleModel 12% (3d2h)  /usage  2m
+```
+
+- `EMAIL` comes from `config.local.toml`. If there is no email, ccx shows `-`.
+- `KIND` is `subscriptionType` from `claude auth status`. `TIER` comes from `oauthAccount.organizationRateLimitTier` in the `.claude.json` of the account. If ccx does not know the tier, it shows the raw value.
+- `SESSION`, `WEEKLY` and `SCOPED` show the percent used. The time in parentheses is the time until the window resets.
+- `SOURCE` is `/usage` or `cachedUsageUtilization`. `AGE` is the age of the usage data.
+
+ccx uses the usage cache when it is less than `usage.fresh_minutes` old (default 15). If not, ccx runs the `/usage` fetch for each account at the same time, and waits for a maximum of `usage.fetch_timeout_secs` (default 5). If the fetch fails, ccx uses `cachedUsageUtilization` from the `.claude.json` of the account. If the two sources are missing, ccx shows `unknown`. A failed fetch never makes the command fail.
+
+The exit code is:
+
+| Code | Meaning |
+|---|---|
+| 0 | At least one enabled account is logged in and not limited. |
+| 3 | All logged-in enabled accounts are limited: session usage is `pick.session_avoid` (default 90) or more, or weekly usage is `pick.weekly_avoid` (default 95) or more. |
+| 4 | No enabled account is logged in. |
+
+`ccx status` has no session model. Thus, a scoped weekly window does not make an account limited here. Unknown usage does not make an account limited.
+
+### Refresh the usage cache
+
+```sh
+ccx usage refresh angel2   # Fetch the usage of one account.
+ccx usage refresh --all    # Fetch the usage of all enabled accounts.
+```
+
+The refresh writes `~/.local/state/ccx/usage/<name>.json`. ccx writes a temporary file at mode 0600, then renames it. The refresh waits for a maximum of 30 seconds for each account. The exit code is 1 when a fetch fails.
+
+### The `/usage` fetch
+
+ccx runs this command for each account ([ADR 0005](docs/adr/0005-m0-usage-hooks-off.md)):
+
+```sh
+claude -p "/usage" --output-format stream-json --verbose --no-session-persistence --strict-mcp-config --settings '{"disableAllHooks":true}'
+```
+
+- The command always runs in `~/.local/state/ccx/probe`. ccx makes this directory at mode 0700 if it does not exist. The command never runs in your current directory. Thus, project settings, project hooks, project MCP servers and project `CLAUDE.md` files have no effect.
+- For the base account, `CLAUDE_CONFIG_DIR` is not set. For the other accounts, `CLAUDE_CONFIG_DIR` is the directory of the account.
+- All hooks are off. `--no-session-persistence` stops the session file.
+- ccx reads `usage_report.rate_limits.limits[]` from the `assistant` event.
+- ccx never reads, keeps or refreshes Claude Code credentials. A test fails if the code uses the OAuth token endpoint, reads `.credentials.json` or reads a keychain secret.
 
 ## Configuration
 

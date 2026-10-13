@@ -53,6 +53,9 @@ _ccx() {
             ccx__subcmd__manage,sync)
                 cmd="ccx__subcmd__manage__subcmd__sync"
                 ;;
+            ccx__subcmd__usage,refresh)
+                cmd="ccx__subcmd__usage__subcmd__refresh"
+                ;;
             *)
                 ;;
         esac
@@ -214,7 +217,7 @@ _ccx() {
             return 0
             ;;
         ccx__subcmd__status)
-            opts="-h --help"
+            opts="-h --json --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -228,8 +231,22 @@ _ccx() {
             return 0
             ;;
         ccx__subcmd__usage)
-            opts="-h --help"
+            opts="-h --help refresh"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        ccx__subcmd__usage__subcmd__refresh)
+            opts="-h --all --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
