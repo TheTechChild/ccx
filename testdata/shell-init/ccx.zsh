@@ -51,6 +51,18 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(add)
+_arguments "${_arguments_options[@]}" : \
+'--dir=[The account dir. The default is \`~/.claude-NAME\`]:DIR:_default' \
+'--email=[The email to give to \`claude auth login --email\`]:EMAIL:_default' \
+'--no-login[Stop after sync. Do not log in]' \
+'-y[Confirm the plan without a prompt]' \
+'--yes[Confirm the plan without a prompt]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':name -- The account name. It must match `^\[a-z0-9\]\[a-z0-9_-\]*$`:_default' \
+&& ret=0
+;;
 (list)
 _arguments "${_arguments_options[@]}" : \
 '--json[Print stable JSON]' \
@@ -220,6 +232,7 @@ _ccx__subcmd__handoff_commands() {
 _ccx__subcmd__manage_commands() {
     local commands; commands=(
 'adopt:Find the accounts on this machine and write them into the config' \
+'add:Make a new account\: the dir, the sync links, the login and the config entry' \
 'list:Show each configured account' \
 'shell-init:Print shell code for the profile\: completions and account aliases' \
 'sync:Link the shared setup of the base account into other accounts' \
@@ -227,6 +240,11 @@ _ccx__subcmd__manage_commands() {
 'service:Install, remove or show the background usage refresh' \
     )
     _describe -t commands 'ccx manage commands' commands "$@"
+}
+(( $+functions[_ccx__subcmd__manage__subcmd__add_commands] )) ||
+_ccx__subcmd__manage__subcmd__add_commands() {
+    local commands; commands=()
+    _describe -t commands 'ccx manage add commands' commands "$@"
 }
 (( $+functions[_ccx__subcmd__manage__subcmd__adopt_commands] )) ||
 _ccx__subcmd__manage__subcmd__adopt_commands() {

@@ -28,6 +28,9 @@ _ccx() {
             ccx,usage)
                 cmd="ccx__subcmd__usage"
                 ;;
+            ccx__subcmd__manage,add)
+                cmd="ccx__subcmd__manage__subcmd__add"
+                ;;
             ccx__subcmd__manage,adopt)
                 cmd="ccx__subcmd__manage__subcmd__adopt"
                 ;;
@@ -93,12 +96,34 @@ _ccx() {
             return 0
             ;;
         ccx__subcmd__manage)
-            opts="-h --help adopt list shell-init sync doctor service"
+            opts="-h --help adopt add list shell-init sync doctor service"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        ccx__subcmd__manage__subcmd__add)
+            opts="-y -h --dir --email --no-login --yes --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --dir)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --email)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;

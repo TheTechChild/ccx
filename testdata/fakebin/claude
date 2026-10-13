@@ -5,6 +5,14 @@
 #   is "main@example.com" when CLAUDE_CONFIG_DIR is not set. Otherwise it is
 #   "<suffix>@example.com", where the dir name is ".claude-<suffix>".
 #   A dir name that contains "loggedout" gives `"loggedIn": false`.
+#   When the dir has the file ".fake-login" (from `auth login`), the
+#   status is logged in with the email in that file.
+# - `claude auth login [--email E]` needs CLAUDE_CONFIG_DIR. It writes
+#   "<dir>/.fake-login" with the email FAKE_LOGIN_EMAIL, else E, else
+#   "<suffix>@example.com". It also writes "<dir>/.claude.json" with
+#   `oauthAccount.organizationRateLimitTier` FAKE_LOGIN_TIER (default
+#   "default_claude_max_5x") and `organizationType` FAKE_LOGIN_ORG_TYPE
+#   (default "claude_max"). FAKE_LOGIN_FAIL makes it fail with exit 1.
 # - When FAKE_CLAUDE_VERSION is set, `claude --version` prints its value.
 #   When FAKE_LOGGED_OUT is set, all accounts are logged out.
 # - `claude -p /usage ...` prints synthetic stream-json events. The
@@ -41,10 +49,43 @@ if ("@ARGV" eq "--version" && defined $ENV{FAKE_CLAUDE_VERSION}) {
     exit 0;
 }
 
+if (@ARGV >= 2 && $ARGV[0] eq 'auth' && $ARGV[1] eq 'login') {
+    my $dir = $ENV{CLAUDE_CONFIG_DIR} or die "fake claude: auth login needs CLAUDE_CONFIG_DIR\n";
+    if ($ENV{FAKE_LOGIN_FAIL}) {
+        print STDERR "fake claude: login failed\n";
+        exit 1;
+    }
+    my ($email) = "@ARGV" =~ /--email (\S+)/;
+    my ($suffix) = $dir =~ m{/\.claude-([^/]+)$};
+    $email = $ENV{FAKE_LOGIN_EMAIL} // $email // ($suffix // 'user') . '@example.com';
+    open(my $fh, '>', "$dir/.fake-login") or die "cannot write $dir/.fake-login: $!";
+    print $fh $email;
+    close($fh);
+    open($fh, '>', "$dir/.claude.json") or die "cannot write $dir/.claude.json: $!";
+    print $fh $json->encode({ oauthAccount => {
+        organizationRateLimitTier => $ENV{FAKE_LOGIN_TIER} // 'default_claude_max_5x',
+        organizationType => $ENV{FAKE_LOGIN_ORG_TYPE} // 'claude_max',
+    } }), "\n";
+    close($fh);
+    print "Login successful.\n";
+    exit 0;
+}
+
 if ("@ARGV" eq "auth status --json") {
     my $dir = $ENV{CLAUDE_CONFIG_DIR} // '';
     my ($name) = $dir =~ m{/\.claude-([^/]+)$};
     $name = 'main' if $dir eq '';
+    if ($dir ne '' && open(my $fh, '<', "$dir/.fake-login")) {
+        my $email = <$fh>;
+        close($fh);
+        print $json->encode({
+            loggedIn         => JSON::PP::true,
+            authMethod       => 'claude.ai',
+            email            => $email,
+            subscriptionType => 'max',
+        }), "\n";
+        exit 0;
+    }
     if ($dir =~ /loggedout/ || !defined $name || $ENV{FAKE_LOGGED_OUT}) {
         print $json->encode({ loggedIn => JSON::PP::false }), "\n";
         exit 1;

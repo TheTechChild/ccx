@@ -4,7 +4,7 @@ ccx is a command-line tool. It starts Claude Code on the account that has the mo
 
 ccx is for a person who has more than one Claude Code account, for example a personal Max account and a work account. Each account has its own configuration directory. ccx reads the usage of each account and starts `claude` on the account that has the most capacity available. You can also name the account.
 
-> **Status:** Version 0.1.0. `ccx @name`, automatic selection, `ccx status`, `ccx usage refresh`, `ccx manage adopt`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync`, `ccx manage doctor`, `ccx manage service`, `ccx handoff` and the automatic handoff on `ccx -c` and `ccx --resume <id>` are available. Refer to [PLAN.md](PLAN.md) for the plan.
+> **Status:** Version 0.1.0. `ccx @name`, automatic selection, `ccx status`, `ccx usage refresh`, `ccx manage adopt`, `ccx manage add`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync`, `ccx manage doctor`, `ccx manage service`, `ccx handoff` and the automatic handoff on `ccx -c` and `ccx --resume <id>` are available. Refer to [PLAN.md](PLAN.md) for the plan.
 
 ## Credential policy
 
@@ -147,6 +147,32 @@ After you confirm, adopt does these steps:
 Adopt keeps the other entries and the comments in a file that exists. It writes each file to a temporary file and then renames it. When `config.toml` is a symlink, adopt keeps the symlink and changes the target file. Adopt always writes `config.local.toml` at the overlay path, never next to the symlink target.
 
 You can run adopt again. It adds only the accounts and the emails that are not in the config.
+
+### Add a new account
+
+```sh
+ccx manage add work                            # Show the plan, then ask for confirmation.
+ccx manage add work --email user@example.com   # Give the email to `claude auth login`.
+ccx manage add work --dir ~/accounts/work      # Use a different directory.
+ccx manage add work --no-login                 # Do not log in.
+ccx manage add work -y                         # Do not ask. Use this in scripts.
+```
+
+`ccx manage add NAME` makes a new account in one step. The name must match `^[a-z0-9][a-z0-9_-]*$`. Add refuses a name or a directory that an account in the config uses. Add shows the plan and changes nothing until you confirm. When there is no terminal and you do not give `-y`, add stops and changes nothing.
+
+After you confirm, add does these steps:
+
+1. It makes the directory `~/.claude-NAME` (or `--dir`) with mode 0700.
+2. It links the shared setup of the base account into the directory, as `ccx manage sync` does.
+3. It runs `claude auth login` with `CLAUDE_CONFIG_DIR` set to the new directory. With `--email`, it runs `claude auth login --email <email>`. With `--no-login`, add does not do steps 3 and 4.
+4. It runs `claude auth status --json` in the new account and compares the email with `--email`. If the emails are different, add shows a warning and asks before it writes the config. When there is no terminal, add stops and does not change the config.
+5. It adds the account (the name and the directory) to `config.toml`. `config.toml` gets no email addresses.
+6. It writes the email only to `config.local.toml`, with mode 0600.
+7. It shows the kind, the tier and the weight that automatic selection uses, for example `work: kind max, tier Max 5x, weight 5`. An unknown tier shows the raw value.
+
+Add keeps the other entries and the comments in the two files. It writes each file to a temporary file and then renames it. Add never reads or keeps the Claude Code credentials. Only `claude auth login` touches them.
+
+If the login fails, the config does not change. Run `ccx manage add` again. Add accepts a directory that exists when it contains only Claude Code files. To add a directory that has a login already, use `ccx manage adopt`.
 
 ### List the accounts
 

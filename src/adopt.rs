@@ -149,7 +149,7 @@ pub fn run(parent: &Env, yes: bool) -> Result<()> {
         home.as_os_str(),
     )?;
 
-    if !confirm(yes)? {
+    if !confirm(yes, "Write these changes?", "ccx manage adopt -y")? {
         println!("Nothing written.");
         return Ok(());
     }
@@ -210,7 +210,7 @@ pub fn discover(home: &Path) -> Result<(Vec<Found>, Vec<String>)> {
 }
 
 /// Reads a TOML file for editing. A missing file gives an empty document.
-fn read_doc(path: &Path) -> Result<DocumentMut> {
+pub fn read_doc(path: &Path) -> Result<DocumentMut> {
     match fs::read_to_string(path) {
         Ok(text) => text.parse().map_err(|e| format!("{}: {e}", path.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(DocumentMut::new()),
@@ -219,7 +219,7 @@ fn read_doc(path: &Path) -> Result<DocumentMut> {
 }
 
 /// The name of the account in `doc` whose dir is `dir` after expansion.
-fn name_for_dir(doc: &DocumentMut, dir: &Path, home: &Path) -> Option<String> {
+pub fn name_for_dir(doc: &DocumentMut, dir: &Path, home: &Path) -> Option<String> {
     let accounts = doc.get("accounts")?.as_table_like()?;
     accounts.iter().find_map(|(name, account)| {
         let text = account.get("dir")?.as_str()?;
@@ -227,13 +227,13 @@ fn name_for_dir(doc: &DocumentMut, dir: &Path, home: &Path) -> Option<String> {
     })
 }
 
-fn has_account(doc: &DocumentMut, name: &str) -> bool {
+pub fn has_account(doc: &DocumentMut, name: &str) -> bool {
     doc.get("accounts")
         .and_then(|accounts| accounts.get(name))
         .is_some()
 }
 
-fn email_of<'a>(doc: &'a DocumentMut, name: &str) -> Option<&'a str> {
+pub fn email_of<'a>(doc: &'a DocumentMut, name: &str) -> Option<&'a str> {
     doc.get("accounts")?.get(name)?.get("email")?.as_str()
 }
 
@@ -249,14 +249,14 @@ fn accounts_table(doc: &mut DocumentMut) -> Result<&mut Table> {
         .ok_or_else(|| "`accounts` must be a table".to_string())
 }
 
-fn add_account(doc: &mut DocumentMut, name: &str, dir_text: &str) -> Result<()> {
+pub fn add_account(doc: &mut DocumentMut, name: &str, dir_text: &str) -> Result<()> {
     let mut table = Table::new();
     table.insert("dir", value(dir_text));
     accounts_table(doc)?.insert(name, Item::Table(table));
     Ok(())
 }
 
-fn set_email(doc: &mut DocumentMut, name: &str, email: &str) -> Result<()> {
+pub fn set_email(doc: &mut DocumentMut, name: &str, email: &str) -> Result<()> {
     accounts_table(doc)?
         .entry(name)
         .or_insert_with(|| Item::Table(Table::new()))
@@ -283,7 +283,7 @@ fn auth_email(claude: &Path, parent: &Env, account: &Account, depth: u32) -> Opt
 }
 
 /// Gets the email from the output of `claude auth status --json`.
-fn parse_email(stdout: &[u8]) -> Option<String> {
+pub fn parse_email(stdout: &[u8]) -> Option<String> {
     let status: serde_json::Value = serde_json::from_slice(stdout).ok()?;
     if status["loggedIn"] != true {
         return None;
@@ -294,18 +294,19 @@ fn parse_email(stdout: &[u8]) -> Option<String> {
         .map(str::to_string)
 }
 
-fn confirm(yes: bool) -> Result<bool> {
+/// Asks the user to confirm. `yes` confirms without a prompt. With no
+/// terminal, it is an error that tells the user to run `retry`.
+pub fn confirm(yes: bool, prompt: &str, retry: &str) -> Result<bool> {
     if yes {
         return Ok(true);
     }
     if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
-        return Err(
-            "no terminal to confirm the changes. Nothing was written. To confirm, run `ccx manage adopt -y`"
-                .into(),
-        );
+        return Err(format!(
+            "no terminal to confirm the changes. Nothing was changed. To confirm, run `{retry}`"
+        ));
     }
     dialoguer::Confirm::new()
-        .with_prompt("Write these changes?")
+        .with_prompt(prompt)
         .default(false)
         .interact()
         .map_err(|e| format!("cannot read the answer: {e}"))
