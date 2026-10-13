@@ -4,7 +4,7 @@ ccx is a command-line tool. It starts Claude Code on the account that has the mo
 
 ccx is for a person who has more than one Claude Code account, for example a personal Max account and a work account. Each account has its own configuration directory. ccx reads the usage of each account and starts `claude` on the account that has the most capacity available. You can also name the account.
 
-> **Status:** Version 0.1.0. `ccx @name`, automatic selection, `ccx status`, `ccx usage refresh`, `ccx manage adopt`, `ccx manage add`, `ccx manage bootstrap`, `ccx manage login`, `ccx manage logout`, `ccx manage edit`, `ccx manage edit-config`, `ccx manage rm`, `ccx manage list`, `ccx manage shell-init`, `ccx manage sync` (also `--prefs`), `ccx manage doctor`, `ccx manage service`, `ccx handoff`, the automatic handoff on `ccx -c` and `ccx --resume <id>`, and API-key accounts as a paid fallback are available. Refer to [PLAN.md](PLAN.md) for the plan.
+> **Status:** Version 0.1.0. `ccx @name`, automatic selection, `ccx status`, `ccx usage refresh`, `ccx manage adopt`, `ccx manage add`, `ccx manage bootstrap`, `ccx manage login`, `ccx manage logout`, `ccx manage edit`, `ccx manage edit-config`, `ccx manage rm`, `ccx manage list`, `ccx manage spend`, `ccx manage shell-init`, `ccx manage sync` (also `--prefs`), `ccx manage doctor`, `ccx manage service`, `ccx handoff`, the automatic handoff on `ccx -c` and `ccx --resume <id>`, and API-key accounts as a paid fallback are available. Refer to [PLAN.md](PLAN.md) for the plan.
 
 ## Credential policy
 
@@ -84,6 +84,7 @@ ccx @paid --allow-paid -c   # --allow-paid can also come just after @name.
 - `ccx status` and `ccx manage list` show the kind `api-key (paid)` with no usage. ccx does not run the `/usage` fetch for an API-key account.
 - `ccx handoff <id> @paid` copies the session, then asks before it resumes on the paid account.
 - The base account `~/.claude` cannot be an API-key account.
+- `ccx manage spend` shows an estimate of the money that each API-key account used in a month. Refer to [Show the spend of API-key accounts](#show-the-spend-of-api-key-accounts).
 
 To add an API-key account, refer to [Add an API-key account](#add-an-api-key-account).
 
@@ -322,6 +323,31 @@ With no NAME on a terminal, rm starts a wizard. You select the account and selec
 ccx manage list          # Show a table: name, directory, email, aliases and kind.
 ccx manage list --json   # Show stable JSON for scripts.
 ```
+
+### Show the spend of API-key accounts
+
+```sh
+ccx manage spend                       # The current month, all API-key accounts.
+ccx manage spend --month 2026-09       # A different month (local time).
+ccx manage spend @paid                 # Only one account.
+ccx manage spend --month 2026-09 --json  # Show stable JSON for scripts.
+```
+
+The report shows one row for each account and model, a total for each account and a grand total. It shows only accounts with `kind = "api_key"`. Subscription accounts are not in the report.
+
+How ccx calculates the spend:
+
+1. ccx reads the session transcripts (`projects/**/*.jsonl`) in the directory of each API-key account.
+2. For each assistant message in the month, ccx adds the `usage` token counts for its model: input, output, cache write and cache read. ccx counts each message one time, also when the transcript has more than one line for it.
+3. ccx multiplies the token counts by the price of the model. The built-in price table has the current Claude models. A `[pricing.<model>]` entry in `config.toml` replaces the built-in price of that model (refer to [Configuration](#configuration)). A model name with a date suffix, for example `claude-sonnet-4-5-20250929`, also uses the price of `claude-sonnet-4-5`.
+
+Important:
+
+- The report is an estimate from local files. It is not your bill. ccx does not call a billing API and does not read the API key for the report.
+- A model with no price shows as `unpriced` with its token counts. The totals do not include it. Add a `[pricing.<model>]` entry to give it a price.
+- ccx uses the cache write price for all cache writes. It does not use a different price for the 1-hour cache or for long prompts.
+- When a transcript line is not valid JSON, or an assistant message has no timestamp, model or usage, ccx skips the line. The report shows the number of skipped lines.
+- `ccx handoff` copies a session with its earlier messages. When you hand off a session to an API-key account, the report also counts the copied messages that are in the month.
 
 ### Add completions and aliases to your shell
 
@@ -600,7 +626,15 @@ max_interval_secs = 1800   # The longest interval of the service. It must be min
 [prefs]                    # Optional. Changes to the allowlist of `ccx manage sync --prefs`.
 allow = []                 # Keys to copy also.
 deny = []                  # Keys not to copy.
+
+[pricing.claude-opus-5-5]  # Optional. Replaces the built-in price of a model for `ccx manage spend`.
+input = 4                  # USD for each million input tokens.
+output = 20                # USD for each million output tokens.
+cache_write = 5            # USD for each million cache write tokens.
+cache_read = 0.2           # USD for each million cache read tokens.
 ```
+
+A `[pricing.<model>]` entry must have all four prices. Each price is 0 or more.
 
 Put email addresses only in the overlay file `config.local.toml`. ccx reads it from `$XDG_CONFIG_HOME/ccx/`, or from `~/.config/ccx/`. ccx merges the overlay over `config.toml`. Do not commit the overlay. Give it mode 0600.
 

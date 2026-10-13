@@ -1,0 +1,13 @@
+Spend of API-key accounts in 2026-10 (estimate from local transcripts)
+
+ACCOUNT  MODEL                       INPUT  OUTPUT  CACHE WRITE  CACHE READ      COST
+paid     claude-future-9               700      90            0           0  unpriced
+paid     claude-haiku-4-5-20251001   40000    2000            0       12000     $0.05
+paid     claude-opus-5-5              1500    5300        21500      250000     $0.27
+paid     claude-sonnet-4-5-20250929  50000   10000            0           0     $0.20
+paid     total                                                                  $0.52
+shell    total                                                                  $0.00
+TOTAL                                                                           $0.52
+
+Skipped 2 malformed or partial transcript lines.
+This is an estimate from local transcripts. ccx does not call a billing API. The totals do not include unpriced models.

@@ -19,6 +19,7 @@ mod resume;
 mod schedule;
 mod service;
 mod shell_init;
+mod spend;
 mod status;
 mod sync;
 mod usage;
@@ -252,6 +253,28 @@ enum Manage {
         #[arg(long)]
         json: bool,
     },
+    /// Show an estimate of the money that each API-key account used in a
+    /// month.
+    ///
+    /// Spend reads the session transcripts (`projects/**/*.jsonl`) in the
+    /// dir of each account with `kind = "api_key"`. It adds the token
+    /// counts of the assistant messages in the month for each model and
+    /// multiplies them by a price table. `[pricing.<model>]` in
+    /// `config.toml` overrides the built-in prices. Spend does not read
+    /// the API key and does not call a billing API.
+    Spend {
+        /// The account, for example `@paid`. The default is all API-key
+        /// accounts.
+        #[arg(value_name = "@NAME")]
+        account: Option<String>,
+        /// The month in local time, as YYYY-MM. The default is the
+        /// current month.
+        #[arg(long, value_name = "YYYY-MM")]
+        month: Option<String>,
+        /// Print stable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Print shell code for the profile: completions and account aliases.
     ///
     /// Add one line to the shell profile, for example
@@ -477,6 +500,11 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
                     }
                 }
                 Manage::List { json } => list::run(&env, json)?,
+                Manage::Spend {
+                    account,
+                    month,
+                    json,
+                } => spend::run(&env, month.as_deref(), account.as_deref(), json)?,
                 Manage::ShellInit { shell } => shell_init::run(&env, shell, Cli::command())?,
                 Manage::Sync {
                     name,
