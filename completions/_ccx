@@ -217,6 +217,7 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '()--all[Refresh all enabled accounts]' \
 '--background[Run as the detached background refresh\: no output, no wait for the lock and the \`usage.refresh_min_gap_secs\` rule]' \
+'--scheduled[Run as the service job\: a background refresh that fetches only the accounts that are due by the adaptive interval]' \
 '-h[Print help]' \
 '--help[Print help]' \
 '::name -- The account to refresh:_default' \
@@ -330,7 +331,7 @@ _ccx__subcmd__manage__subcmd__service_commands() {
     local commands; commands=(
 'install:Write the job for this system and load it' \
 'uninstall:Stop the job and remove its files' \
-'status:Show if the job is installed and loaded, the last refresh and the age of each usage cache' \
+'status:Show if the job is installed and loaded, the last refresh, and the cache age and the next due time of each account' \
     )
     _describe -t commands 'ccx manage service commands' commands "$@"
 }

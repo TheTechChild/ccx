@@ -1,5 +1,7 @@
 //! `ccx manage service install|uninstall|status` (#13): an optional job
-//! that runs `ccx usage refresh --all --background` every 300 seconds.
+//! that runs `ccx usage refresh --all --background --scheduled` every 60
+//! seconds. Each run fetches only the accounts that are due by the
+//! adaptive interval of #22 (refer to `schedule`).
 //!
 //! - macOS: a launchd agent in `~/Library/LaunchAgents/`, loaded with
 //!   `launchctl`.
@@ -29,10 +31,11 @@ use crate::launch;
 use crate::paths::tilde;
 use crate::pick;
 use crate::refresh;
+use crate::schedule;
 use crate::usage;
 
 /// The fixed time between two runs of the job.
-pub const INTERVAL_SECS: u32 = 300;
+pub const INTERVAL_SECS: u32 = schedule::TICK_SECS;
 /// The launchd label and the name of the plist file.
 pub const LABEL: &str = "io.github.thetechchild.ccx.refresh";
 /// The name of the systemd units, with no suffix.
@@ -41,7 +44,7 @@ pub const UNIT: &str = "ccx-refresh";
 /// of `claude` before it.
 pub const MINIMAL_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 /// The arguments of the job after the ccx path.
-pub const JOB_ARGS: [&str; 4] = ["usage", "refresh", "--all", "--background"];
+pub const JOB_ARGS: [&str; 5] = ["usage", "refresh", "--all", "--background", "--scheduled"];
 /// The exit code of `status` when a path in the job does not exist.
 pub const EXIT_BROKEN: u8 = 1;
 
@@ -173,7 +176,7 @@ fn xml_unescape(text: &str) -> String {
         .replace("&amp;", "&")
 }
 
-/// The launchd plist: `RunAtLoad` and a `StartInterval` of 300 seconds.
+/// The launchd plist: `RunAtLoad` and a `StartInterval` of 60 seconds.
 pub fn plist(job: &Job) -> String {
     let mut out = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
@@ -218,8 +221,8 @@ pub fn systemd_service(job: &Job) -> String {
     out
 }
 
-/// The systemd user timer: it starts the service 1 minute after the timer starts,
-/// then 300 seconds after each run.
+/// The systemd user timer: it starts the service 1 minute after the timer
+/// starts, then 60 seconds after each run.
 pub fn systemd_timer() -> String {
     format!(
         "[Unit]\nDescription=ccx usage refresh every {INTERVAL_SECS} s\n\n\
@@ -228,7 +231,7 @@ pub fn systemd_timer() -> String {
     )
 }
 
-/// The crontab line for a system with no systemd: each 5 minutes.
+/// The crontab line for a system with no systemd: each minute.
 pub fn crontab_line(job: &Job) -> String {
     let vars: Vec<String> = job
         .env_vars()
@@ -236,7 +239,7 @@ pub fn crontab_line(job: &Job) -> String {
         .map(|(key, value)| format!("{key}='{value}'"))
         .collect();
     format!(
-        "*/5 * * * * {} '{}' {} >/dev/null 2>&1",
+        "* * * * * {} '{}' {} >/dev/null 2>&1",
         vars.join(" "),
         job.ccx,
         JOB_ARGS.join(" ")
@@ -468,7 +471,7 @@ pub fn install(env: &Env) -> Result<()> {
             println!("ccx: wrote {}", tilde(path, home));
         }
         println!(
-            "ccx: the service runs `ccx usage refresh --all --background` every {INTERVAL_SECS} s"
+            "ccx: the service runs `ccx usage refresh --all --background --scheduled` every {INTERVAL_SECS} s"
         );
         println!("ccx: claude: {}", job.claude);
     }
@@ -590,7 +593,7 @@ fn last_refresh_text(at_ms: Option<u64>, now_ms: u64) -> String {
     }
 }
 
-/// The age of the usage cache of each account.
+/// The age of the usage cache and the next due time of each account.
 fn cache_ages(env: &Env, home: &OsStr, now_ms: u64) -> String {
     let config = match config::load(env) {
         Ok(config) => config,
@@ -602,9 +605,12 @@ fn cache_ages(env: &Env, home: &OsStr, now_ms: u64) -> String {
         .map(|a| a.name.chars().count())
         .max()
         .unwrap_or(0);
+    // The same calculation as the job, but ccx does not write the state.
+    let mut state = schedule::read_state(home);
     let mut out = String::from("usage cache:\n");
     for account in &config.accounts {
-        let age = usage::read_cache(&usage::cache_path(home, &account.name)).map_or_else(
+        let cache = usage::read_cache(&usage::cache_path(home, &account.name));
+        let age = cache.as_ref().map_or_else(
             || "none".to_string(),
             |s| {
                 format!(
@@ -613,9 +619,41 @@ fn cache_ages(env: &Env, home: &OsStr, now_ms: u64) -> String {
                 )
             },
         );
-        out.push_str(&format!("  {:<width$}  {age}\n", account.name));
+        let next = if account.enabled && !account.is_paid() {
+            let launched = schedule::last_launch(home, &account.name);
+            let due = state.update(
+                &account.name,
+                cache.as_ref(),
+                launched,
+                now_ms,
+                &config.usage,
+            );
+            let interval = state.accounts[&account.name].interval_secs;
+            next_due_text(due, interval, now_ms)
+        } else {
+            "not refreshed".into()
+        };
+        out.push_str(&format!(
+            "  {:<width$}  {age}, next fetch: {next}\n",
+            account.name
+        ));
     }
     out
+}
+
+/// The next due time, for example `now` or `14:25 (in 3m, every 5m)`.
+fn next_due_text(due_ms: u64, interval_secs: Option<u64>, now_ms: u64) -> String {
+    if due_ms <= now_ms {
+        return "now".into();
+    }
+    let every = interval_secs.map_or_else(String::new, |secs| {
+        format!(", every {}", usage::short_duration(secs as i64 * 1000))
+    });
+    format!(
+        "{} (in {}{every})",
+        pick::time_text(due_ms as i64, now_ms, pick::local_clock),
+        usage::short_duration((due_ms - now_ms) as i64)
+    )
 }
 
 #[cfg(test)]
@@ -651,7 +689,7 @@ mod tests {
         let text = plist(&job());
         golden("ccx-refresh.plist", &text);
         assert!(text.contains("<key>RunAtLoad</key>\n\t<true/>"));
-        assert!(text.contains("<integer>300</integer>"));
+        assert!(text.contains("<integer>60</integer>"));
     }
 
     #[test]
@@ -659,7 +697,7 @@ mod tests {
         golden("ccx-refresh.service", &systemd_service(&job()));
         let timer = systemd_timer();
         golden("ccx-refresh.timer", &timer);
-        assert!(timer.contains("OnUnitActiveSec=300\n"));
+        assert!(timer.contains("OnUnitActiveSec=60\n"));
     }
 
     #[test]
@@ -780,6 +818,17 @@ mod tests {
         if cfg!(target_os = "macos") {
             assert_eq!(detect(&Env::default()).unwrap(), Kind::Launchd);
         }
+    }
+
+    #[test]
+    fn next_due_text_shows_now_or_the_time_and_the_interval() {
+        let now = 10 * 60_000;
+        assert_eq!(next_due_text(0, None, now), "now");
+        assert_eq!(next_due_text(now, Some(120), now), "now");
+        let text = next_due_text(now + 3 * 60_000, Some(300), now);
+        assert!(text.ends_with(" (in 3m, every 5m)"), "{text}");
+        let text = next_due_text(now + 90_000, None, now);
+        assert!(text.ends_with(" (in 1m)"), "{text}");
     }
 
     #[test]

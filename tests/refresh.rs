@@ -362,3 +362,172 @@ fn ccx_no_refresh_turns_off_the_launch_fetches() {
     assert_eq!(fx.calls().len(), 1, "only the launch");
     assert!(!fx.state("refresh.lock").exists());
 }
+
+// The scheduled refresh of the service (#22).
+
+const SCHEDULED: [&str; 5] = ["usage", "refresh", "--all", "--background", "--scheduled"];
+
+fn schedule(fx: &Fixture) -> Value {
+    serde_json::from_slice(&fs::read(fx.state("schedule.json")).unwrap()).unwrap()
+}
+
+fn run_ok(cmd: &mut Command) -> Output {
+    let out = cmd.output().expect("run ccx");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(out.stdout, b"");
+    out
+}
+
+#[test]
+fn a_scheduled_tick_that_is_not_due_starts_no_claude_process() {
+    let fx = Fixture::new(CONFIG);
+    // Idle accounts at 0% with data from 1 minute ago are due in 29m.
+    fx.cache("main", 0.0, MINUTE);
+    fx.cache("angel2", 0.0, MINUTE);
+    let start = Instant::now();
+    run_ok(&mut fx.ccx(&SCHEDULED));
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        start.elapsed()
+    );
+    assert!(fx.calls().is_empty(), "{:?}", fx.calls());
+    // The tick wrote the next due time of each account.
+    let state = schedule(&fx);
+    for name in ["main", "angel2"] {
+        let entry = &state["accounts"][name];
+        assert_eq!(entry["interval_secs"], 1800, "{state}");
+        let due = entry["next_due_ms"].as_u64().unwrap();
+        assert!(due > now_ms() + 28 * MINUTE, "{state}");
+        assert!(entry["last_attempt_ms"].is_null(), "{state}");
+    }
+    assert!(!fx.state("refresh.json").exists());
+}
+
+#[test]
+fn a_scheduled_tick_fetches_only_the_due_accounts() {
+    let fx = Fixture::new(CONFIG);
+    fx.cache("main", 0.0, MINUTE);
+    // 40 minutes old: more than the maximum interval.
+    fx.cache("angel2", 0.0, 40 * MINUTE);
+    let limits = json!([{"kind": "session", "percent": 45, "resets_at": LATER, "scope": null}]);
+    run_ok(
+        fx.ccx(&SCHEDULED)
+            .env("FAKE_USAGE_LIMITS", limits.to_string()),
+    );
+    let fetches: Vec<Value> = fx
+        .calls()
+        .into_iter()
+        .filter(|c| c["argv"][1] == "/usage")
+        .collect();
+    assert_eq!(fetches.len(), 1, "{fetches:?}");
+    assert!(
+        fetches[0]["env"]["CLAUDE_CONFIG_DIR"]
+            .as_str()
+            .unwrap()
+            .ends_with(".claude-angel2")
+    );
+    assert_eq!(fx.cached_session("angel2"), Some(45.0));
+    assert_eq!(fx.cached_session("main"), Some(0.0));
+    let state = schedule(&fx);
+    // 45% is half way to the limit: half way between 120 s and 1800 s.
+    assert_eq!(state["accounts"]["angel2"]["interval_secs"], 960, "{state}");
+    assert!(state["accounts"]["angel2"]["last_attempt_ms"].is_u64());
+    assert!(fx.state("refresh.json").exists());
+}
+
+#[test]
+fn a_scheduled_tick_after_a_reset_fetches_at_the_minimum_interval() {
+    let fx = Fixture::new(CONFIG);
+    fx.cache("main", 0.0, MINUTE);
+    fx.cache("angel2", 0.0, MINUTE);
+    // angel2 was at 80% 3 minutes ago, and its window has reset since.
+    let snapshot = json!({
+        "source": "/usage",
+        "fetched_at_ms": now_ms() - 3 * MINUTE,
+        "limits": [{"kind": "session", "percent": 80, "resets_at": "2026-01-01T00:00:00Z", "scope": null}],
+    });
+    fs::write(fx.cache_path("angel2"), snapshot.to_string()).unwrap();
+    run_ok(&mut fx.ccx(&SCHEDULED));
+    assert_eq!(fx.usage_calls(), 1);
+    assert_eq!(fx.cached_session("angel2"), Some(5.0), "the fake default");
+}
+
+#[test]
+fn a_launch_makes_the_scheduled_refresh_more_frequent() {
+    let fx = Fixture::new(CONFIG);
+    // Idle accounts: due 30 minutes after the fetch.
+    fx.cache("main", 0.0, 20 * MINUTE);
+    fx.cache("angel2", 0.0, 20 * MINUTE);
+    run_ok(&mut fx.ccx(&SCHEDULED));
+    assert_eq!(fx.usage_calls(), 0);
+    // A launch on angel2 halves its interval to 15 minutes.
+    launch(fx.ccx(&["@angel2"]).env("CCX_NO_REFRESH", "1"));
+    run_ok(&mut fx.ccx(&SCHEDULED));
+    let fetches: Vec<Value> = fx
+        .calls()
+        .into_iter()
+        .filter(|c| c["argv"][1] == "/usage")
+        .collect();
+    assert_eq!(fetches.len(), 1, "{fetches:?}");
+    assert!(
+        fetches[0]["env"]["CLAUDE_CONFIG_DIR"]
+            .as_str()
+            .unwrap()
+            .ends_with(".claude-angel2")
+    );
+}
+
+#[test]
+fn adaptive_false_keeps_the_fixed_5_minutes() {
+    let fx = Fixture::new(&format!("{CONFIG}\n[usage]\nadaptive = false\n"));
+    fx.cache("main", 0.0, 4 * MINUTE);
+    fx.cache("angel2", 99.0, 4 * MINUTE);
+    run_ok(&mut fx.ccx(&SCHEDULED));
+    assert_eq!(fx.usage_calls(), 0, "4 minutes is less than 5");
+    fx.cache("main", 0.0, 5 * MINUTE + 1000);
+    run_ok(&mut fx.ccx(&SCHEDULED));
+    assert_eq!(fx.usage_calls(), 1, "only main is 5 minutes old");
+    assert_eq!(schedule(&fx)["accounts"]["main"]["interval_secs"], 300);
+}
+
+#[test]
+fn a_failed_scheduled_fetch_waits_for_the_minimum_interval() {
+    let fx = Fixture::new(
+        "[accounts.main]\ndir = \"~/.claude\"\n\n[accounts.nousage]\ndir = \"~/.claude-nousage\"\n\n[usage]\nrefresh_min_gap_secs = 0\n",
+    );
+    fx.cache("main", 0.0, MINUTE);
+    let out = fx.ccx(&SCHEDULED).output().unwrap();
+    assert!(!out.status.success(), "the fetch of nousage fails");
+    assert_eq!(fx.usage_calls(), 1);
+    // The next tick, with no 60-second rule, does not try again at once.
+    run_ok(&mut fx.ccx(&SCHEDULED));
+    assert_eq!(fx.usage_calls(), 1);
+}
+
+/// A launch-time background refresh and a scheduled tick at the same time:
+/// the lock lets only one of them fetch, and the 60-second rule stops the
+/// other after that.
+#[test]
+fn a_scheduled_tick_and_a_launch_refresh_never_fetch_at_the_same_time() {
+    let fx = Fixture::new(CONFIG);
+    let background = ["usage", "refresh", "--all", "--background"];
+    let spawn = |args: &[&str]| fx.ccx(args).env("FAKE_USAGE_SLEEP", "1").spawn().unwrap();
+    let mut first = spawn(&background);
+    let mut second = spawn(&SCHEDULED);
+    assert!(first.wait().unwrap().success());
+    assert!(second.wait().unwrap().success());
+    assert_eq!(fx.usage_calls(), 2, "one process fetched the two accounts");
+    // Both orders again: within 60 seconds, nothing fetches.
+    run_ok(&mut fx.ccx(&SCHEDULED));
+    run_ok(&mut fx.ccx(&background));
+    assert_eq!(fx.usage_calls(), 2);
+
+    // The lock is held by a launch-time fetch: a due tick does not fetch.
+    let fx = Fixture::new(CONFIG);
+    let holder = fx.hold_lock(Duration::from_millis(500));
+    run_ok(&mut fx.ccx(&SCHEDULED));
+    holder.join().unwrap();
+    assert_eq!(fx.usage_calls(), 0);
+    assert!(!fx.state("schedule.json").exists());
+}

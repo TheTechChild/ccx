@@ -159,9 +159,12 @@ fn launchd_install_writes_and_loads_the_plist_and_is_idempotent() {
 
     let plist = fs::read_to_string(fx.home().join(PLIST)).unwrap();
     assert!(plist.contains("<key>RunAtLoad</key>\n\t<true/>"), "{plist}");
-    assert!(plist.contains("<key>StartInterval</key>\n\t<integer>300</integer>"));
+    assert!(plist.contains("<key>StartInterval</key>\n\t<integer>60</integer>"));
     let args = program_arguments(&plist);
-    assert_eq!(args[1..], ["usage", "refresh", "--all", "--background"]);
+    assert_eq!(
+        args[1..],
+        ["usage", "refresh", "--all", "--background", "--scheduled"]
+    );
     assert!(Path::new(&args[0]).is_absolute());
     assert_eq!(
         fs::canonicalize(&args[0]).unwrap().display().to_string(),
@@ -250,7 +253,7 @@ fn systemd_install_writes_the_units_enables_the_timer_and_shows_the_linger_hint(
         fs::canonicalize(exe).unwrap().display().to_string(),
         ccx_path()
     );
-    assert_eq!(args, "usage refresh --all --background");
+    assert_eq!(args, "usage refresh --all --background --scheduled");
     assert!(service.contains(&format!(
         "Environment=\"PATH={}:{MINIMAL_PATH}\"\n",
         Fixture::fakebin().display()
@@ -259,7 +262,7 @@ fn systemd_install_writes_the_units_enables_the_timer_and_shows_the_linger_hint(
         "Environment=\"CCX_CLAUDE_BIN={}\"\n",
         claude_path()
     )));
-    assert!(timer.contains("OnUnitActiveSec=300\n"), "{timer}");
+    assert!(timer.contains("OnUnitActiveSec=60\n"), "{timer}");
     assert!(timer.contains("WantedBy=timers.target\n"));
 
     let calls = fx.take_calls();
@@ -314,14 +317,14 @@ fn cron_install_prints_a_crontab_line_and_changes_no_files() {
     let out = fx.ok(&["manage", "service", "install"]);
     let line = out
         .lines()
-        .find(|l| l.starts_with("*/5 * * * * "))
+        .find(|l| l.starts_with("* * * * * "))
         .unwrap_or_else(|| panic!("{out}"));
     assert!(line.contains(&format!(
         "PATH='{}:{MINIMAL_PATH}'",
         Fixture::fakebin().display()
     )));
     assert!(line.contains(&format!("CCX_CLAUDE_BIN='{}'", claude_path())));
-    assert!(line.ends_with(" usage refresh --all --background >/dev/null 2>&1"));
+    assert!(line.ends_with(" usage refresh --all --background --scheduled >/dev/null 2>&1"));
     assert_eq!(fx.snapshot(), before);
     assert!(fx.take_calls().is_empty());
 
@@ -342,7 +345,9 @@ fn status_works_when_no_service_is_installed() {
         }
         assert!(out.contains("last refresh: never\n"), "{out}");
         assert!(
-            out.contains("usage cache:\n  angel2  none\n  main    none\n"),
+            out.contains(
+                "usage cache:\n  angel2  none, next fetch: now\n  main    none, next fetch: now\n"
+            ),
             "{out}"
         );
     }
@@ -375,7 +380,11 @@ fn status_shows_the_installed_job_the_last_refresh_and_the_cache_age() {
     );
     assert!(out.contains("loaded: yes\n"), "{out}");
     assert!(out.contains(" (3m ago)\n"), "{out}");
-    assert!(out.contains("  main    7m old\n"), "{out}");
+    // No fetch before: the empty window list gives the maximum interval
+    // (30m), so main is due in about 23m.
+    assert!(out.contains("  main    7m old, next fetch: "), "{out}");
+    assert!(out.contains(" (in 22m, every 30m)\n"), "{out}");
+    assert!(out.contains("  angel2  none, next fetch: now\n"), "{out}");
     assert!(!out.contains("error:"), "{out}");
 }
 

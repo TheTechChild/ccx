@@ -507,5 +507,9 @@ fn launch_of_the_base_account_changes_nothing() {
     let before = snapshot(fx.home());
     let out = fx.run(&["@main", "--version"]);
     assert!(out.status.success(), "{}", text(&out));
-    assert_eq!(snapshot(fx.home()), before);
+    // The launch records only its time in the ccx state (#22).
+    let mut after = snapshot(fx.home());
+    after.retain(|path, _| !path.starts_with(".local"));
+    assert_eq!(after, before);
+    assert!(fx.home().join(".local/state/ccx/launches/main").is_file());
 }

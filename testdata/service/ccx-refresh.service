@@ -5,4 +5,4 @@ Description=ccx usage refresh
 Type=oneshot
 Environment="PATH=/opt/claude/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 Environment="CCX_CLAUDE_BIN=/opt/claude/bin/claude"
-ExecStart="/home/test/.local/bin/ccx" usage refresh --all --background
+ExecStart="/home/test/.local/bin/ccx" usage refresh --all --background --scheduled

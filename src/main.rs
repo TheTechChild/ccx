@@ -16,6 +16,7 @@ mod pick;
 mod prefs;
 mod refresh;
 mod resume;
+mod schedule;
 mod service;
 mod shell_init;
 mod status;
@@ -299,9 +300,10 @@ enum Manage {
     },
     /// Install, remove or show the background usage refresh.
     ///
-    /// The service runs `ccx usage refresh --all --background` every 300
-    /// seconds: launchd on macOS, a systemd user timer on Linux. With no
-    /// systemd, `install` prints a crontab line and changes no files.
+    /// The service runs `ccx usage refresh --all --background --scheduled`
+    /// every 60 seconds: launchd on macOS, a systemd user timer on Linux.
+    /// Each run fetches only the accounts that are due. With no systemd,
+    /// `install` prints a crontab line and changes no files.
     Service {
         #[command(subcommand)]
         command: ServiceCommand,
@@ -315,8 +317,8 @@ enum ServiceCommand {
     Install,
     /// Stop the job and remove its files.
     Uninstall,
-    /// Show if the job is installed and loaded, the last refresh and the
-    /// age of each usage cache.
+    /// Show if the job is installed and loaded, the last refresh, and the
+    /// cache age and the next due time of each account.
     Status,
 }
 
@@ -335,6 +337,10 @@ enum UsageCommand {
         /// the lock and the `usage.refresh_min_gap_secs` rule.
         #[arg(long, hide = true, requires = "all")]
         background: bool,
+        /// Run as the service job: a background refresh that fetches only
+        /// the accounts that are due by the adaptive interval.
+        #[arg(long, hide = true, requires = "background")]
+        scheduled: bool,
     },
 }
 
@@ -506,9 +512,11 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
                     name,
                     all: _,
                     background,
+                    scheduled,
                 },
         } => {
-            let ok = status::refresh(&Env::from_process(), name.as_deref(), background)?;
+            let env = Env::from_process();
+            let ok = status::refresh(&env, name.as_deref(), background, scheduled)?;
             Ok(if ok {
                 ExitCode::SUCCESS
             } else {
@@ -614,6 +622,11 @@ fn run_launch(
         let report = launch::dry_run_report(account, claude.as_deref(), &parent, &env, &args);
         print!("{report}");
         return Ok(ExitCode::SUCCESS);
+    }
+
+    // The scheduled refresh refreshes an account more often after a launch.
+    if let Ok(home) = config::home(&parent) {
+        let _ = schedule::record_launch(home, &account.name, usage::now_ms());
     }
 
     if let Some((path, state)) = auto.as_ref().and_then(|a| a.state.as_ref())

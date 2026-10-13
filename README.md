@@ -510,17 +510,17 @@ ccx releases the lock before it starts the background refresh and before it star
 
 ### Background service
 
-The background service is optional. It runs `ccx usage refresh --all --background` every 300 seconds. Thus, the usage cache is fresh before a launch needs it. Stale-while-revalidate works without the service.
+The background service is optional. It runs `ccx usage refresh --all --background --scheduled` every 60 seconds. Each run fetches only the accounts that are due (refer to [Adaptive interval](#adaptive-interval)). Thus, the usage cache is fresh before a launch needs it. Stale-while-revalidate works without the service.
 
 ```sh
 ccx manage service install     # Write the job for this system and load it.
-ccx manage service status      # Show the job, the last refresh and the age of each usage cache.
+ccx manage service status      # Show the job, the last refresh, and the cache age and the next fetch of each account.
 ccx manage service uninstall   # Stop the job and remove its files.
 ```
 
 | System | What `install` does |
 |---|---|
-| macOS | It writes `~/Library/LaunchAgents/io.github.thetechchild.ccx.refresh.plist` with `RunAtLoad` and `StartInterval` 300, and loads it with `launchctl bootstrap`. |
+| macOS | It writes `~/Library/LaunchAgents/io.github.thetechchild.ccx.refresh.plist` with `RunAtLoad` and `StartInterval` 60, and loads it with `launchctl bootstrap`. |
 | Linux with systemd | It writes `ccx-refresh.service` and `ccx-refresh.timer` in `~/.config/systemd/user/` and runs `systemctl --user enable --now ccx-refresh.timer`. When linger is off, it tells you to run `loginctl enable-linger`. Without linger, the timer runs only while you are logged in. |
 | Linux with no systemd | It prints a crontab line. Add the line with `crontab -e`. ccx never edits the crontab and changes no files. |
 
@@ -528,6 +528,22 @@ ccx manage service uninstall   # Stop the job and remove its files.
 - When `claude` moves, for example after a mise upgrade, the job cannot find it. `ccx manage service status` and `ccx manage doctor` then show an error. Run `ccx manage service install` again.
 - The job is a background refresh. It uses the same lock and the same `usage.refresh_min_gap_secs` rule as the refresh of a launch. Thus, a job run and a launch never fetch at the same time.
 - A second `install` with no changes does nothing. `status` works also when no service is installed. Its exit code is 1 when a path in the job does not exist.
+- The crontab line runs each minute.
+
+#### Adaptive interval
+
+Each run of the job reads the usage cache. For each account, it calculates an interval. The account is due when its cache is older than its interval. The job fetches only the due accounts. When no account is due, the job starts no `claude` process. These rules set the interval:
+
+| Data | Effect on the interval |
+|---|---|
+| The highest percent in `limits[]` | At 0%, the interval is `usage.max_interval_secs`. At 90% or more, it is `usage.min_interval_secs`. Between these values, the interval is proportional. |
+| The change since the fetch before | When the percent increases, the interval is at most half of the time until the account gets to 90% at that rate. |
+| The soonest `resets_at` | The interval stops at the reset of a window that is not at 0%. When a window has reset, the interval is `usage.min_interval_secs`. |
+| The last ccx launch on the account | When the last launch is less than one hour ago, the interval is half. |
+
+The interval is always between `usage.min_interval_secs` (default 120) and `usage.max_interval_secs` (default 1800). When a fetch fails, the job tries again after `usage.min_interval_secs`. Set `usage.adaptive = false` to fetch each account every 300 seconds.
+
+The job writes the next due time of each account to `~/.local/state/ccx/schedule.json`. Each launch writes its time to `~/.local/state/ccx/launches/<name>`. `ccx manage service status` shows the next fetch of each account, for example `main    7m old, next fetch: 14:25 (in 3m, every 10m)`.
 
 ### The `/usage` fetch
 
@@ -577,6 +593,9 @@ stickiness = 10            # Points within the best score that keep the last acc
 fresh_minutes = 15         # Usage data that is less old than this is fresh.
 fetch_timeout_secs = 5     # The time limit of the blocking fetch of a launch.
 refresh_min_gap_secs = 60  # The minimum time between two background refreshes.
+adaptive = true            # Adapt the interval of the service to the usage. false: every 300 seconds.
+min_interval_secs = 120    # The shortest interval of the service. It must be 1 or more.
+max_interval_secs = 1800   # The longest interval of the service. It must be min_interval_secs or more.
 
 [prefs]                    # Optional. Changes to the allowlist of `ccx manage sync --prefs`.
 allow = []                 # Keys to copy also.
