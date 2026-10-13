@@ -229,6 +229,17 @@ fn gather(
 
 /// Runs `claude auth status --json` in the probe dir.
 fn auth_status(claude: &Path, env: &Env, home: &OsStr, timeout: Duration) -> Option<Auth> {
+    parse_auth(&auth_status_text(claude, env, home, timeout)?)
+}
+
+/// Runs `claude auth status --json` in the probe dir and returns its
+/// output. `env` is the account environment from `launch::build_env`.
+pub fn auth_status_text(
+    claude: &Path,
+    env: &Env,
+    home: &OsStr,
+    timeout: Duration,
+) -> Option<String> {
     let probe = usage::probe_dir(home);
     usage::make_private_dir(&probe).ok()?;
     let mut command = Command::new(claude);
@@ -240,7 +251,7 @@ fn auth_status(claude: &Path, env: &Env, home: &OsStr, timeout: Duration) -> Opt
     // `claude auth status` exits 1 when the account is logged out, but it
     // still prints the JSON.
     let (_, text) = usage::run_with_timeout(command, timeout).ok()?;
-    parse_auth(&text)
+    Some(text)
 }
 
 /// `ccx usage refresh NAME` or `ccx usage refresh --all` (all enabled
@@ -339,15 +350,18 @@ fn window(limit: &Limit, now_ms: u64) -> String {
 }
 
 fn kind_cell(row: &Row) -> String {
-    match &row.auth {
-        None => "-".into(),
-        Some(auth) if !auth.logged_in => "logged out".into(),
-        Some(auth) => auth
-            .subscription
-            .clone()
-            .or_else(|| auth.method.clone())
-            .unwrap_or_else(|| "-".into()),
+    row.auth.as_ref().map_or_else(|| "-".into(), kind_label)
+}
+
+/// The account kind: the subscription type, else the auth method.
+pub fn kind_label(auth: &Auth) -> String {
+    if !auth.logged_in {
+        return "logged out".into();
     }
+    auth.subscription
+        .clone()
+        .or_else(|| auth.method.clone())
+        .unwrap_or_else(|| "-".into())
 }
 
 /// The text table. The time in parentheses is the time until the window

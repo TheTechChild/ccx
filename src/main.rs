@@ -1,3 +1,4 @@
+mod add;
 mod adopt;
 mod config;
 mod doctor;
@@ -95,6 +96,30 @@ enum Manage {
     /// Find the accounts on this machine and write them into the config.
     Adopt {
         /// Confirm the changes without a prompt.
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// Make a new account: the dir, the sync links, the login and the
+    /// config entry.
+    ///
+    /// Add shows a plan and asks before it changes files. It makes the dir
+    /// at mode 0700, runs sync, then runs `claude auth login` in the new
+    /// account. It compares the email of the login with `--email`. It
+    /// writes the account to `config.toml` and the email only to
+    /// `config.local.toml`. Then it shows the kind, the tier and the weight.
+    Add {
+        /// The account name. It must match `^[a-z0-9][a-z0-9_-]*$`.
+        name: String,
+        /// The account dir. The default is `~/.claude-NAME`.
+        #[arg(long)]
+        dir: Option<String>,
+        /// The email to give to `claude auth login --email`.
+        #[arg(long)]
+        email: Option<String>,
+        /// Stop after sync. Do not log in.
+        #[arg(long)]
+        no_login: bool,
+        /// Confirm the plan without a prompt.
         #[arg(short, long)]
         yes: bool,
     },
@@ -212,6 +237,22 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
             let env = Env::from_process();
             match command {
                 Manage::Adopt { yes } => adopt::run(&env, yes)?,
+                Manage::Add {
+                    name,
+                    dir,
+                    email,
+                    no_login,
+                    yes,
+                } => add::run(
+                    &env,
+                    &add::Args {
+                        name,
+                        dir,
+                        email,
+                        no_login,
+                        yes,
+                    },
+                )?,
                 Manage::List { json } => list::run(&env, json)?,
                 Manage::ShellInit { shell } => shell_init::run(&env, shell, Cli::command())?,
                 Manage::Sync {
