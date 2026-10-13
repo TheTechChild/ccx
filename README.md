@@ -2,7 +2,7 @@
 
 ccx is a command-line tool. It starts Claude Code on the account that has the most usage available.
 
-> **Status:** Work in progress. ccx starts Claude Code on an account that you name. `ccx manage adopt`, `ccx manage list` and `ccx manage shell-init` are available. Automatic selection is not available yet. Refer to [PLAN.md](PLAN.md) for the plan.
+> **Status:** Work in progress. ccx starts Claude Code on an account that you name. `ccx manage adopt`, `ccx manage list`, `ccx manage shell-init` and `ccx manage sync` are available. Automatic selection is not available yet. Refer to [PLAN.md](PLAN.md) for the plan.
 
 ## Usage
 
@@ -80,6 +80,45 @@ If your profile has a hand-written alias, for example `alias claude2='CLAUDE_CON
 3. Remove the hand-written alias from your profile.
 4. Start a new shell. Make sure that `alias claude2` shows `ccx @angel2`, and that `type claude` shows the `claude` program, not an alias.
 
+### Share the setup with sync
+
+`ccx manage sync` links the setup of the base account `~/.claude` into the other accounts with symbolic links. A change in the base account is then available in all accounts.
+
+```sh
+ccx manage sync angel2             # Sync one account.
+ccx manage sync --all              # Sync all accounts other than the base account.
+ccx manage sync angel2 --dry-run   # Show the plan. Change nothing.
+ccx manage sync angel2 --force     # Also move the CONFLICT items to a backup, with no prompt.
+```
+
+Sync links `settings.json`, `CLAUDE.md`, `keybindings.json`, `statusline.py`, `agents/`, `commands/`, `output-styles/` and `plugins/` as one item each. `skills/` is a real directory in each account, with one link for each base skill. Sync never links `skills/synced`. Sync never links identity files, credentials, sessions, history or dotfiles. [ADR 0008](docs/adr/0008-sync-share-lists.md) has the full lists.
+
+Sync shows a plan with one line for each item:
+
+| Action | Meaning |
+|---|---|
+| `LINK` | The link is missing. Sync makes it. |
+| `OK` | The link is correct. |
+| `RELINK` | The link points to a different target. Sync removes only the link and makes a new one. |
+| `CONFLICT` | A real file or directory is where the link must be. |
+| `SKIP` | The account keeps its own item (`own = [...]`). |
+| `MKDIR` | `skills/` is missing or is a link. Sync makes a real directory. |
+| `UNKNOWN` | A base entry that ccx does not know. Sync does not share it. |
+
+Sync moves a CONFLICT item to `<account dir>/.ccx-backup/<timestamp>/` only when you give `--force` or confirm on a terminal. Sync never deletes a file. When CONFLICT items stay, sync exits with code 1. Sync never changes the base account, and it refuses a change whose real path is in the base directory or outside the account directory.
+
+`ccx @name` also does a fast check before it starts `claude`. It adds missing links, for example a new skill. It never changes a CONFLICT item.
+
+To keep an item of your own in one account, add it to `own`:
+
+```toml
+[accounts.angel2]
+dir = "~/.claude-angel2"
+own = ["statusline.py", "skills/tdd"]   # Optional. Sync shows these items as SKIP.
+```
+
+> **Known risk:** `plugins/` is one link, so `plugins/synced` is shared by all accounts. To keep `plugins/` separate, put `"plugins"` in `own`.
+
 ## Configuration
 
 ccx reads `config.toml` from the first location that applies:
@@ -95,6 +134,7 @@ dir = "~/.claude"          # The base account. Exactly one account must use this
 [accounts.angel2]
 dir = "~/.claude-angel2"
 aliases = ["claude2"]      # Optional. `ccx manage shell-init` makes `alias claude2='ccx @angel2'`.
+own = ["statusline.py"]    # Optional. Items that `ccx manage sync` does not link.
 ```
 
 Put email addresses only in the overlay file `config.local.toml`. ccx reads it from `$XDG_CONFIG_HOME/ccx/`, or from `~/.config/ccx/`. ccx merges the overlay over `config.toml`. Do not commit the overlay. Give it mode 0600.

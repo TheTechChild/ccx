@@ -96,6 +96,7 @@ pub fn run(parent: &Env, yes: bool) -> Result<()> {
             aliases: Vec::new(),
             enabled: true,
             email: None,
+            own: Vec::new(),
         };
         let Some(claude) = &claude else { continue };
         match auth_email(claude, parent, &account, depth) {

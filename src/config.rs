@@ -46,6 +46,9 @@ pub struct Account {
     pub aliases: Vec<String>,
     pub enabled: bool,
     pub email: Option<String>,
+    /// Shared items that this account keeps as its own files (#7), for
+    /// example `settings.json` or `skills/tdd`. Sync shows them as SKIP.
+    pub own: Vec<String>,
     /// True for the one account whose dir is `~/.claude`.
     pub is_base: bool,
 }
@@ -118,6 +121,7 @@ struct RawAccount {
     aliases: Option<Vec<String>>,
     enabled: Option<bool>,
     email: Option<String>,
+    own: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -284,6 +288,12 @@ fn build(raw: RawConfig, home: &OsStr) -> Result<Config> {
         {
             return Err(format!("accounts.{name}.weight: must be a positive number"));
         }
+        let own = account.own.unwrap_or_default();
+        if let Some(item) = own.iter().find(|item| !crate::sync::valid_own(item)) {
+            return Err(format!(
+                "accounts.{name}.own: `{item}` is not a shared item or `skills/<name>`"
+            ));
+        }
         accounts.push(Account {
             is_base: dir == base_dir,
             name,
@@ -292,6 +302,7 @@ fn build(raw: RawConfig, home: &OsStr) -> Result<Config> {
             aliases: account.aliases.unwrap_or_default(),
             enabled: account.enabled.unwrap_or(true),
             email: account.email,
+            own,
         });
     }
     // Dirs are unique, so at most one account is the base account.
@@ -559,6 +570,29 @@ mod tests {
         assert_eq!(config.usage.refresh_min_gap_secs, 3);
     }
 
+    #[test]
+    fn own_loads_and_defaults_to_empty() {
+        let config = parse_ok(&format!(
+            "{MINIMAL}\n[accounts.work]\ndir = \"~/.claude-work\"\nown = [\"settings.json\", \"skills/tdd\"]\n"
+        ));
+        assert_eq!(
+            config.account("work").unwrap().own,
+            ["settings.json", "skills/tdd"]
+        );
+        assert!(config.account("angel2").unwrap().own.is_empty());
+    }
+
+    #[test]
+    fn own_must_name_a_shared_item() {
+        for bad in ["projects", "skills/synced", "chrome"] {
+            let err = parse_err(&format!(
+                "{MINIMAL}\n[accounts.work]\ndir = \"~/.claude-work\"\nown = [\"{bad}\"]\n"
+            ));
+            assert!(err.contains("accounts.work.own"), "{err}");
+            assert!(err.contains(bad), "{err}");
+        }
+    }
+
     // Validation rules.
 
     #[test]
@@ -657,9 +691,9 @@ mod tests {
         assert!(err.contains("colour"), "{err}");
 
         let err = parse_err(&format!(
-            "{MINIMAL}\n[accounts.x]\ndir = \"~/.x\"\nown = 1\n"
+            "{MINIMAL}\n[accounts.x]\ndir = \"~/.x\"\nmine = 1\n"
         ));
-        assert!(err.contains("own"), "{err}");
+        assert!(err.contains("mine"), "{err}");
 
         let err = parse_err(&format!("{MINIMAL}\n[surprise]\n"));
         assert!(err.contains("surprise"), "{err}");
