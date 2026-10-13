@@ -517,3 +517,50 @@ fn launch_of_the_base_account_changes_nothing() {
     assert_eq!(after, before);
     assert!(fx.home().join(".local/state/ccx/launches/main").is_file());
 }
+
+#[test]
+fn without_a_terminal_or_with_yes_sync_does_not_ask_and_shows_unknown_items() {
+    let fx = Fixture::new(CONFIG);
+    write(&fx.base().join("CLAUDE.md"), "base");
+    write(&fx.base().join("notes/a.md"), "x");
+    let config = fs::read_to_string(fx.home().join(".config/ccx/config.toml")).unwrap();
+    for args in [
+        &["manage", "sync", "--all"][..],
+        &["manage", "sync", "--all", "-y"],
+        &["manage", "sync", "angel2", "--yes", "--dry-run"],
+    ] {
+        let out = fx.ok(args);
+        assert!(out.contains("UNKNOWN   notes (not shared)"), "{out}");
+    }
+    assert_eq!(
+        fs::read_to_string(fx.home().join(".config/ccx/config.toml")).unwrap(),
+        config
+    );
+    assert!(fs::symlink_metadata(fx.angel2().join("notes")).is_err());
+}
+
+#[test]
+fn share_items_link_ignore_items_hide_and_launch_adds_a_missing_share_link() {
+    let fx = Fixture::new(&format!(
+        "{CONFIG}\n[sync]\nshare = [\"notes\", \"not-there\"]\nignore = [\"cache.json\"]\n"
+    ));
+    write(&fx.base().join("notes/a.md"), "x");
+    write(&fx.base().join("cache.json"), "{}");
+    let out = fx.ok(&["manage", "sync", "angel2"]);
+    assert!(out.contains("LINK      notes"), "{out}");
+    assert!(!out.contains("UNKNOWN"), "{out}");
+    assert!(!out.contains("not-there"), "{out}");
+    assert_eq!(
+        link_target(&fx.angel2().join("notes")),
+        fx.base().join("notes")
+    );
+    assert!(fs::symlink_metadata(fx.angel2().join("cache.json")).is_err());
+
+    fs::remove_file(fx.angel2().join("notes")).unwrap();
+    let out = fx.run(&["@angel2", "--version"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(
+        link_target(&fx.angel2().join("notes")),
+        fx.base().join("notes")
+    );
+}

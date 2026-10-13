@@ -46,6 +46,9 @@ pub trait Prompt {
     fn confirm(&mut self, prompt: &str, default: bool) -> Step<bool>;
     /// Asks for one item of `items`. Returns its index.
     fn select(&mut self, prompt: &str, items: &[String], default: usize) -> Step<usize>;
+    /// Asks for zero or more items of `items`. No item is selected at the
+    /// start. Returns the indexes in order.
+    fn multi_select(&mut self, prompt: &str, items: &[String]) -> Step<Vec<usize>>;
 }
 
 /// True when a wizard can start: stdin, stdout and stderr are terminals.
@@ -155,6 +158,15 @@ impl Prompt for Terminal {
             .map_err(stop)?
             .ok_or(Stop::Cancel)
     }
+
+    fn multi_select(&mut self, prompt: &str, items: &[String]) -> Step<Vec<usize>> {
+        dialoguer::MultiSelect::new()
+            .with_prompt(prompt)
+            .items(items)
+            .interact_opt()
+            .map_err(stop)?
+            .ok_or(Stop::Cancel)
+    }
 }
 
 /// A fake input source for the tests: it gives the answers in order.
@@ -174,6 +186,8 @@ pub mod fake {
         Enter,
         /// The index of a select item.
         Pick(usize),
+        /// The indexes of the items of a multi-select.
+        Picks(&'static [usize]),
         /// Esc (or Ctrl-C).
         Esc,
     }
@@ -248,6 +262,15 @@ pub mod fake {
                 Reply::Pick(i) if i < items.len() => Ok(i),
                 Reply::Esc => Err(Stop::Cancel),
                 other => panic!("`{prompt}` wants one of {items:?}, not {other:?}"),
+            }
+        }
+
+        fn multi_select(&mut self, prompt: &str, items: &[String]) -> Step<Vec<usize>> {
+            match self.next(prompt) {
+                Reply::Enter => Ok(Vec::new()),
+                Reply::Picks(picks) if picks.iter().all(|&i| i < items.len()) => Ok(picks.to_vec()),
+                Reply::Esc => Err(Stop::Cancel),
+                other => panic!("`{prompt}` wants items of {items:?}, not {other:?}"),
             }
         }
     }

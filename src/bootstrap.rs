@@ -24,6 +24,7 @@ use crate::lifecycle;
 use crate::service;
 use crate::status;
 use crate::sync;
+use crate::wizard;
 
 /// The native installer of Claude Code.
 pub const INSTALL_COMMAND: &str = "curl -fsSL https://claude.ai/install.sh | bash";
@@ -386,7 +387,14 @@ fn sync_step(env: &Env, config: &Config) -> Result<Step> {
             made.push(account.dir.clone());
         }
     }
-    let synced = sync::run_counted(env, None, false, false)?;
+    // On a terminal, sync asks which unknown items to share and asks to
+    // move the CONFLICT items, as `ccx manage sync --all` does.
+    let mut prompt = wizard::Terminal;
+    let ask: Option<&mut dyn wizard::Prompt> = match terminal() {
+        true => Some(&mut prompt),
+        false => None,
+    };
+    let synced = sync::run_counted(env, None, false, false, ask)?;
     let changed = synced.changed + made.len();
     Ok(if !synced.ok {
         Step::new(

@@ -149,6 +149,8 @@ _arguments "${_arguments_options[@]}" : \
 '()--all[Sync all accounts other than the base account]' \
 '--dry-run[Show the plan and change nothing]' \
 '--force[Move CONFLICT items to the backup without a prompt]' \
+'-y[Ask no questions. Unknown items stay not shared, and CONFLICT items move only with --force]' \
+'--yes[Ask no questions. Unknown items stay not shared, and CONFLICT items move only with --force]' \
 '(--force)--prefs[Copy the user MCP servers and the allowlisted preferences of the base account. Do not link]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \

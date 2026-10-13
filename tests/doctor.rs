@@ -188,9 +188,10 @@ fn golden() -> String {
         .collect();
     let count = |level: &str| lines.iter().filter(|l| l.starts_with(level)).count();
     format!(
-        "{}\n\n{} OK, {} WARN, {} FAIL\n",
+        "{}\n\n{} OK, {} INFO, {} WARN, {} FAIL\n",
         lines.join("\n"),
         count("OK "),
+        count("INFO "),
         count("WARN "),
         count("FAIL ")
     )
@@ -270,6 +271,71 @@ fn override_var_only_exits_1() {
         let got = stdout(&out);
         assert!(got.contains(&format!("WARN  env: {key} is set")), "{got}");
     }
+}
+
+#[test]
+fn info_lines_only_exit_0() {
+    let mut fx = Fixture::new(CONFIG);
+    clean(&fx);
+    // An unknown base entry and an orphan keychain item are notes.
+    fs::create_dir(fx.base().join("new-dir")).unwrap();
+    fx.keychain = vec![
+        service_name(&fx.angel2()),
+        "Claude Code-credentials-0badf00d".into(),
+    ];
+    let out = fx.run(&["manage", "doctor"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let got = stdout(&out);
+    let shown =
+        "INFO  unknown: new-dir in ~/.claude is not shared; run `ccx manage sync --all` to choose";
+    assert!(got.contains(shown), "{got}");
+    if cfg!(target_os = "macos") {
+        assert!(
+            got.contains(
+                "INFO  keychain: orphan keychain item `Claude Code-credentials-0badf00d` matches no account dir"
+            ),
+            "{got}"
+        );
+    }
+    assert!(got.contains(" INFO, 0 WARN, 0 FAIL\n"), "{got}");
+
+    let out = fx.run(&["manage", "doctor", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["result"], "INFO");
+    assert!(
+        value["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| { c["level"] == "INFO" && c["check"] == "unknown" })
+    );
+}
+
+#[test]
+fn share_and_ignore_entries_are_not_unknown() {
+    let config = format!("{CONFIG}\n[sync]\nshare = [\"notes\"]\nignore = [\"cache.json\"]\n");
+    let fx = Fixture::new(&config);
+    write(&fx.base().join("notes/a.md"), "x");
+    write(&fx.base().join("cache.json"), "{}");
+    clean(&fx);
+    // Sync linked the share item like a built-in shared item.
+    assert_eq!(
+        fs::read_link(fx.angel2().join("notes")).unwrap(),
+        fx.base().join("notes")
+    );
+    assert!(fs::symlink_metadata(fx.angel2().join("cache.json")).is_err());
+    let out = fx.run(&["manage", "doctor"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let got = stdout(&out);
+    assert!(
+        got.contains("OK    unknown: no unknown entries in ~/.claude"),
+        "{got}"
+    );
+    assert!(
+        got.contains("OK    link: angel2: 5 shared items are correct"),
+        "{got}"
+    );
 }
 
 #[test]

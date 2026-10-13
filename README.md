@@ -384,6 +384,7 @@ ccx manage sync angel2             # Sync one account.
 ccx manage sync --all              # Sync all accounts other than the base account.
 ccx manage sync angel2 --dry-run   # Show the plan. Change nothing.
 ccx manage sync angel2 --force     # Also move the CONFLICT items to a backup, with no prompt.
+ccx manage sync --all -y           # Ask no questions.
 ```
 
 Sync links `settings.json`, `CLAUDE.md`, `keybindings.json`, `statusline.py`, `agents/`, `commands/`, `output-styles/` and `plugins/` as one item each. `skills/` is a real directory in each account, with one link for each base skill. Sync never links `skills/synced`. Sync never links identity files, credentials, sessions, history or dotfiles. [ADR 0008](docs/adr/0008-sync-share-lists.md) has the full lists.
@@ -398,7 +399,11 @@ Sync shows a plan with one line for each item:
 | `CONFLICT` | A real file or directory is where the link must be. |
 | `SKIP` | The account keeps its own item (`own = [...]`). |
 | `MKDIR` | `skills/` is missing or is a link. Sync makes a real directory. |
-| `UNKNOWN` | A base entry that ccx does not know. Sync does not share it. |
+| `UNKNOWN` | A base entry that ccx does not know and that is not in `[sync] share` or `[sync] ignore`. Sync does not share it. |
+
+On a terminal, sync first asks which `UNKNOWN` items to share: "Select the items to share with all accounts (the others are not shared)". Sync writes the items that you select to `[sync] share` and the other items to `[sync] ignore` in `config.toml`. The write keeps the comments. When `config.toml` is a symbolic link, sync writes the target file. Then sync continues with the new lists. Sync links each `share` item like a built-in shared item. Sync does not ask again about an item in `share` or `ignore`. To change your answer, edit `[sync]` in `config.toml`.
+
+With `--dry-run`, with `-y`, or with no terminal, sync does not ask. It shows the `UNKNOWN` items and does not change `config.toml`. With `-y`, sync also does not ask about CONFLICT items: they move only with `--force`.
 
 Sync moves a CONFLICT item to `<account dir>/.ccx-backup/<timestamp>/` only when you give `--force` or confirm on a terminal. Sync never deletes a file. When CONFLICT items stay, sync exits with code 1. Sync never changes the base account, and it refuses a change whose real path is in the base directory or outside the account directory.
 
@@ -411,6 +416,8 @@ To keep an item of your own in one account, add it to `own`:
 dir = "~/.claude-angel2"
 own = ["statusline.py", "skills/tdd"]   # Optional. Sync shows these items as SKIP.
 ```
+
+`own` can also name an item of `[sync] share`.
 
 > **Known risk:** `plugins/` is one link, so `plugins/synced` is shared by all accounts. To keep `plugins/` separate, put `"plugins"` in `own`.
 
@@ -451,7 +458,7 @@ After the copy, ccx shows `MCP servers that need re-auth: ...`. These are the ne
 
 ### Check the setup with doctor
 
-`ccx manage doctor` checks the ccx setup. It shows one line for each check with `OK`, `WARN` or `FAIL`. Doctor only reports. It never changes a file.
+`ccx manage doctor` checks the ccx setup. It shows one line for each check with `OK`, `INFO`, `WARN` or `FAIL`. `INFO` is a note, not a problem. Doctor only reports. It never changes a file.
 
 ```sh
 ccx manage doctor          # Show the results as text.
@@ -465,14 +472,14 @@ ccx manage doctor --json   # Show the results as JSON for scripts.
 | `env` | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_SECURESTORAGE_CONFIG_DIR` and `CLAUDE_CONFIG_DIR` in the current shell. ccx removes or replaces them at launch. Doctor never shows their values. |
 | `path` | Each account directory exists, and the config writes it in the canonical form (absolute, with no trailing slash). |
 | `stray` | The stray file `~/.claude/.claude.json`. |
-| `unknown` | Entries in `~/.claude` that are not on the share list or the never-share list. |
+| `unknown` | `INFO` for each entry in `~/.claude` that is not on the share list, not on the never-share list, and not in `[sync] share` or `[sync] ignore`. Run `ccx manage sync --all` on a terminal to select which of these entries to share. |
 | `link` | The sync plan of each account. A shared item that is a real file or directory, for example `settings.json` after a write replaced the link, is a `FAIL`. |
 | `skill` | Real directories and files in `<account>/skills/` that are not links and not `synced`: "local-only skill <name> in <account>; promote to base?". |
 | `home-path` | `hooks` and `statusLine` commands in `settings.json` that use the absolute home path. Doctor shows the `$HOME/...` form. |
 | `service` | The installed background service. Each path in the job (ccx and `claude`) exists. If not, doctor tells you to run `ccx manage service install` again. Doctor shows no line when no service is installed. |
-| `keychain` | macOS only. Keychain items `Claude Code-credentials-*` that agree with no account directory. Doctor reads only the item names, never the secret values. |
+| `keychain` | macOS only. `INFO` for each keychain item `Claude Code-credentials-*` that agrees with no account directory. Doctor reads only the item names, never the secret values. |
 
-The exit code is 0 when all checks pass, 1 when there is a `WARN` and 2 when there is a `FAIL`.
+The last line counts the levels, for example `9 OK, 2 INFO, 0 WARN, 0 FAIL`. The exit code is 0 when all checks pass or give only `INFO`, 1 when there is a `WARN` and 2 when there is a `FAIL`. In the `--json` output, the level of a note is `"INFO"`.
 
 ## Usage data
 
@@ -627,6 +634,10 @@ max_interval_secs = 1800   # The longest interval of the service. It must be min
 allow = []                 # Keys to copy also.
 deny = []                  # Keys not to copy.
 
+[sync]                     # Optional. Top-level entries of ~/.claude that are not built-in shared items.
+share = []                 # Entries that `ccx manage sync` links like a built-in shared item.
+ignore = []                # Entries that sync does not share and does not show as UNKNOWN.
+
 [pricing.claude-opus-5-5]  # Optional. Replaces the built-in price of a model for `ccx manage spend`.
 input = 4                  # USD for each million input tokens.
 output = 20                # USD for each million output tokens.
@@ -635,6 +646,8 @@ cache_read = 0.2           # USD for each million cache read tokens.
 ```
 
 A `[pricing.<model>]` entry must have all four prices. Each price is 0 or more.
+
+A name in `[sync] share` or `[sync] ignore` is a top-level entry of `~/.claude`. It must not be empty, `.` or `..`. It must not contain `/` or start with `.`. It must not be on the never-share list, be a built-in shared item, or be `skills`. A name cannot be in the two lists. A `share` name that is not in `~/.claude` has no effect.
 
 Put email addresses only in the overlay file `config.local.toml`. ccx reads it from `$XDG_CONFIG_HOME/ccx/`, or from `~/.config/ccx/`. ccx merges the overlay over `config.toml`. Do not commit the overlay. Give it mode 0600.
 

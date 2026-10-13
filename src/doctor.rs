@@ -13,12 +13,12 @@ use std::process::Command;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::config::{self, Account, Config, Result};
+use crate::config::{self, Account, Config, Result, SyncLists};
 use crate::env::Env;
 use crate::launch;
 use crate::paths::{expand_tilde, tilde};
 use crate::service;
-use crate::sync::{self, Action, Class, Plan, State, Want};
+use crate::sync::{self, Action, Plan, State, Want};
 
 /// Variables that override the account. ccx removes or replaces them at
 /// launch, but doctor tells the user.
@@ -38,6 +38,8 @@ const KEYCHAIN_PREFIX: &str = "Claude Code-credentials";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Level {
     Ok,
+    /// A note, not a problem. It does not change the exit code.
+    Info,
     Warn,
     Fail,
 }
@@ -46,14 +48,20 @@ impl Level {
     pub fn label(self) -> &'static str {
         match self {
             Level::Ok => "OK",
+            Level::Info => "INFO",
             Level::Warn => "WARN",
             Level::Fail => "FAIL",
         }
     }
 
-    /// 0 when all checks pass, 1 for a WARN and 2 for a FAIL.
+    /// 0 when all checks pass or only give INFO, 1 for a WARN and 2 for
+    /// a FAIL.
     pub fn exit_code(self) -> u8 {
-        self as u8
+        match self {
+            Level::Ok | Level::Info => 0,
+            Level::Warn => 1,
+            Level::Fail => 2,
+        }
     }
 }
 
@@ -76,6 +84,10 @@ fn finding(level: Level, check: &'static str, message: impl Into<String>) -> Fin
 
 fn ok(check: &'static str, message: impl Into<String>) -> Finding {
     finding(Level::Ok, check, message)
+}
+
+fn info(check: &'static str, message: impl Into<String>) -> Finding {
+    finding(Level::Info, check, message)
 }
 
 fn warn(check: &'static str, message: impl Into<String>) -> Finding {
@@ -132,7 +144,7 @@ pub fn check_all(env: &Env) -> Vec<Finding> {
     let base = config.base();
     if base.dir.is_dir() {
         out.push(check_stray(base, home));
-        out.extend(check_unknown(base, home));
+        out.extend(check_unknown(base, &config.sync, home));
         out.extend(check_accounts(&config));
     }
     out.extend(check_home_paths(&config, home));
@@ -269,22 +281,20 @@ fn check_stray(base: &Account, home: &OsStr) -> Finding {
     ok("stray", format!("no stray {shown}"))
 }
 
-/// Top-level base entries that are not on the share list or the
-/// never-share list.
-fn check_unknown(base: &Account, home: &OsStr) -> Vec<Finding> {
+/// Top-level base entries that are in no built-in group and not in
+/// `[sync] share` or `[sync] ignore`. They are INFO: sync asks about them.
+fn check_unknown(base: &Account, lists: &SyncLists, home: &OsStr) -> Vec<Finding> {
     let shown = tilde(&base.dir, home);
-    let names = match sync::names(&base.dir) {
+    let names = match sync::unknown_names(&base.dir, lists) {
         Ok(names) => names,
         Err(e) => return vec![fail("unknown", e)],
     };
     let found: Vec<_> = names
         .iter()
-        .map(|name| name.to_string_lossy())
-        .filter(|name| sync::classify(name) == Class::Unknown)
         .map(|name| {
-            warn(
+            info(
                 "unknown",
-                format!("{name} in {shown} is not on the share list or the never-share list"),
+                format!("{name} in {shown} is not shared; run `ccx manage sync --all` to choose"),
             )
         })
         .collect();
@@ -307,7 +317,7 @@ fn check_accounts(config: &Config) -> Vec<Finding> {
         if !account.dir.is_dir() {
             continue; // The path check shows a FAIL.
         }
-        match sync::plan(&base.dir, &account.dir, &account.own) {
+        match sync::plan(&base.dir, &account.dir, &account.own, &config.sync) {
             Ok(plan) => links.extend(check_links(&account.name, &plan)),
             Err(e) => links.push(fail("link", format!("{}: {e}", account.name))),
         }
@@ -527,7 +537,7 @@ fn check_keychain(config: &Config, env: &Env) -> Vec<Finding> {
     let found: Vec<_> = orphans(&services(&dump), &config.accounts)
         .into_iter()
         .map(|name| {
-            warn(
+            info(
                 "keychain",
                 format!("orphan keychain item `{name}` matches no account dir"),
             )
@@ -577,7 +587,7 @@ pub fn orphans(services: &BTreeSet<String>, accounts: &[Account]) -> Vec<String>
 /// The findings as text: one line for each finding, then a summary.
 pub fn render(findings: &[Finding]) -> String {
     let mut out = String::new();
-    let mut counts = [0usize; 3];
+    let mut counts = [0usize; 4];
     for f in findings {
         counts[f.level as usize] += 1;
         out.push_str(&format!(
@@ -588,8 +598,8 @@ pub fn render(findings: &[Finding]) -> String {
         ));
     }
     out.push_str(&format!(
-        "\n{} OK, {} WARN, {} FAIL\n",
-        counts[0], counts[1], counts[2]
+        "\n{} OK, {} INFO, {} WARN, {} FAIL\n",
+        counts[0], counts[1], counts[2], counts[3]
     ));
     out
 }
@@ -628,6 +638,9 @@ mod tests {
     fn exit_codes_follow_the_worst_level() {
         assert_eq!(worst(&[]).exit_code(), 0);
         assert_eq!(worst(&[ok("a", "x")]).exit_code(), 0);
+        // INFO is a note, not a problem.
+        assert_eq!(worst(&[ok("a", "x"), info("b", "y")]).exit_code(), 0);
+        assert_eq!(worst(&[info("b", "y"), warn("c", "z")]).exit_code(), 1);
         assert_eq!(worst(&[ok("a", "x"), warn("b", "y")]).exit_code(), 1);
         assert_eq!(
             worst(&[fail("c", "z"), warn("b", "y"), ok("a", "x")]).exit_code(),
@@ -679,7 +692,7 @@ mod tests {
         // A write replaced the link with a real file.
         fs::write(acct.join("settings.json"), "{}").unwrap();
 
-        let plan = sync::plan(&base, &acct, &[]).unwrap();
+        let plan = sync::plan(&base, &acct, &[], &Default::default()).unwrap();
         let found = check_links("angel2", &plan);
         let lines: Vec<_> = found
             .iter()
@@ -711,7 +724,7 @@ mod tests {
         symlink(base.join("CLAUDE.md"), acct.join("CLAUDE.md")).unwrap();
 
         // `skills` is missing: one line, not one line for each skill.
-        let plan = sync::plan(&base, &acct, &[]).unwrap();
+        let plan = sync::plan(&base, &acct, &[], &Default::default()).unwrap();
         let found = check_links("x", &plan);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].level, Level::Warn);
@@ -720,7 +733,7 @@ mod tests {
         fs::create_dir(acct.join("skills")).unwrap();
         symlink(base.join("skills/a"), acct.join("skills/a")).unwrap();
         symlink(base.join("skills/b"), acct.join("skills/b")).unwrap();
-        let plan = sync::plan(&base, &acct, &[]).unwrap();
+        let plan = sync::plan(&base, &acct, &[], &Default::default()).unwrap();
         assert_eq!(
             check_links("x", &plan),
             vec![ok("link", "x: 4 shared items are correct")]
@@ -831,15 +844,20 @@ attributes:
 
     #[test]
     fn text_and_json_output() {
-        let findings = [ok("env", "clean"), fail("link", "x: bad")];
+        let findings = [
+            ok("env", "clean"),
+            info("unknown", "notes"),
+            fail("link", "x: bad"),
+        ];
         assert_eq!(
             render(&findings),
-            "OK    env: clean\nFAIL  link: x: bad\n\n1 OK, 0 WARN, 1 FAIL\n"
+            "OK    env: clean\nINFO  unknown: notes\nFAIL  link: x: bad\n\n1 OK, 1 INFO, 0 WARN, 1 FAIL\n"
         );
         let value: Value = serde_json::from_str(&to_json(&findings)).unwrap();
         assert_eq!(value["result"], "FAIL");
-        assert_eq!(value["checks"][1]["check"], "link");
-        assert_eq!(value["checks"][1]["level"], "FAIL");
-        assert_eq!(value["checks"][1]["message"], "x: bad");
+        assert_eq!(value["checks"][1]["level"], "INFO");
+        assert_eq!(value["checks"][2]["check"], "link");
+        assert_eq!(value["checks"][2]["level"], "FAIL");
+        assert_eq!(value["checks"][2]["message"], "x: bad");
     }
 }
