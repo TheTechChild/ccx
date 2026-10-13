@@ -387,7 +387,7 @@ _ccx() {
             return 0
             ;;
         ccx__subcmd__manage__subcmd__sync)
-            opts="-h --all --dry-run --force --prefs --help"
+            opts="-y -h --all --dry-run --force --yes --prefs --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

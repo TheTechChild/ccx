@@ -141,7 +141,7 @@ pub fn run(parent: &Env, args: &Args, ask: &mut Ask) -> Result<()> {
 
     make_dir(&dir)?;
     println!("Made {} (mode 0700)", dir.display());
-    let sync_plan = sync::plan(&config.base().dir, &dir, &[])?;
+    let sync_plan = sync::plan(&config.base().dir, &dir, &[], &config.sync)?;
     print!("{}", sync::render(&args.name, &sync_plan));
     let applied = sync::apply(&sync_plan, sync::Mode::Full { conflicts: false })?;
     println!("Sync made {} changes.", applied.changed);
@@ -261,7 +261,7 @@ pub fn wizard(
     )?;
     p.show(&format!(
         "Step 3 of 4: sync. ccx links the shared setup of the base account into the new dir: {}",
-        shared_items(&config.base().dir)
+        shared_items(&config.base().dir, &config.sync)
     ));
     let mut args = Args {
         name,
@@ -302,12 +302,17 @@ pub fn wizard(
 
 /// The names of the base entries that sync links, or a note when there
 /// are none.
-fn shared_items(base: &Path) -> String {
+fn shared_items(base: &Path, lists: &config::SyncLists) -> String {
     let names: Vec<String> = sync::names(base)
         .unwrap_or_default()
         .iter()
         .map(|name| name.to_string_lossy().into_owned())
-        .filter(|name| matches!(sync::classify(name), Class::Shared | Class::Skills))
+        .filter(|name| {
+            matches!(
+                sync::classify_with(name, lists),
+                Class::Shared | Class::Skills
+            )
+        })
         .collect();
     if names.is_empty() {
         "no shared items now".to_string()

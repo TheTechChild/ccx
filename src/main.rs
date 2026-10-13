@@ -291,6 +291,10 @@ enum Manage {
     /// moves a CONFLICT item to `<dir>/.ccx-backup/<timestamp>/` only with
     /// `--force` or after you confirm. It never changes the base account.
     ///
+    /// On a terminal, sync first asks which unknown items of the base
+    /// account to share. It writes the answer to `[sync] share` and
+    /// `[sync] ignore` in config.toml. `--dry-run` and `-y` do not ask.
+    ///
     /// With `--prefs`, sync does not link. It copies the user MCP servers
     /// (through `claude mcp add-json -s user`) and the allowlisted keys of
     /// the base `~/.claude.json` into the account.
@@ -307,6 +311,10 @@ enum Manage {
         /// Move CONFLICT items to the backup without a prompt.
         #[arg(long)]
         force: bool,
+        /// Ask no questions. Unknown items stay not shared, and CONFLICT
+        /// items move only with --force.
+        #[arg(short = 'y', long)]
+        yes: bool,
         /// Copy the user MCP servers and the allowlisted preferences of
         /// the base account. Do not link.
         #[arg(long, conflicts_with = "force")]
@@ -511,12 +519,13 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
                     all: _,
                     dry_run,
                     force,
+                    yes,
                     prefs,
                 } => {
                     let ok = if prefs {
                         prefs::run(&env, name.as_deref(), dry_run)?
                     } else {
-                        sync::run(&env, name.as_deref(), dry_run, force)?
+                        sync::run(&env, name.as_deref(), dry_run, force, yes)?
                     };
                     if !ok {
                         return Ok(ExitCode::FAILURE);
@@ -665,7 +674,7 @@ fn run_launch(
     }
 
     // Add missing links, for example a new skill. Never change a conflict.
-    match sync::health_check(config.base(), account) {
+    match sync::health_check(config.base(), account, &config.sync) {
         Ok(0) => {}
         Ok(n) if show => eprintln!("ccx: sync added {n} missing links in {}", account.name),
         Ok(_) => {}

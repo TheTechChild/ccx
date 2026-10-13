@@ -11,12 +11,16 @@
 
 use std::fs;
 use std::io::{ErrorKind, IsTerminal};
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::config::{self, Account, Config, Result};
+use toml_edit::{Array, DocumentMut, Table, value};
+
+use crate::adopt;
+use crate::config::{self, Account, Config, Result, Source, SyncLists};
 use crate::env::Env;
+use crate::wizard::{Prompt, Stop, Terminal};
 
 /// Top-level items that sync links as one item.
 pub const SHARED: [&str; 8] = [
@@ -96,10 +100,36 @@ pub fn classify(name: &str) -> Class {
     }
 }
 
-/// True when `item` can be in `own = [...]`: a shared item, `skills`, or
-/// `skills/<name>`.
-pub fn valid_own(item: &str) -> bool {
+/// Puts a top-level entry of the base directory into its group, with the
+/// `[sync]` lists of the config. A `share` entry is shared. An `ignore`
+/// entry is never shared and is not unknown.
+pub fn classify_with(name: &str, lists: &SyncLists) -> Class {
+    match classify(name) {
+        Class::Unknown if lists.share.iter().any(|n| n == name) => Class::Shared,
+        Class::Unknown if lists.ignore.iter().any(|n| n == name) => Class::Never,
+        class => class,
+    }
+}
+
+/// Checks a name of `[sync] share` or `[sync] ignore`. The error is the
+/// reason, for the config loader to show with the key and the name.
+pub fn check_list_name(name: &str) -> std::result::Result<(), &'static str> {
+    if name.is_empty() || name.contains('/') || matches!(name, "." | "..") {
+        Err("is not a top-level entry name")
+    } else if name.starts_with('.') || NEVER.contains(&name) {
+        Err("is on the never-share list")
+    } else if SHARED.contains(&name) || name == SKILLS {
+        Err("is a built-in shared item")
+    } else {
+        Ok(())
+    }
+}
+
+/// True when `item` can be in `own = [...]`: a shared item, an item of
+/// `[sync] share`, `skills`, or `skills/<name>`.
+pub fn valid_own(item: &str, share: &[String]) -> bool {
     SHARED.contains(&item)
+        || share.iter().any(|name| name == item)
         || item == SKILLS
         || item.strip_prefix("skills/").is_some_and(|name| {
             !name.is_empty() && !name.contains('/') && !matches!(name, "." | ".." | SKILLS_SYNCED)
@@ -227,8 +257,9 @@ pub fn names(dir: &Path) -> Result<Vec<std::ffi::OsString>> {
 
 /// Makes the plan for the account dir `account`. `base` is the base
 /// directory. Link targets are `base` joined with the item name, so they are
-/// absolute when `base` is absolute. The planner only reads.
-pub fn plan(base: &Path, account: &Path, own: &[String]) -> Result<Plan> {
+/// absolute when `base` is absolute. `lists` adds shared and ignored
+/// entries. The planner only reads.
+pub fn plan(base: &Path, account: &Path, own: &[String], lists: &SyncLists) -> Result<Plan> {
     if !base.is_dir() {
         return Err(format!("the base directory {} is missing", base.display()));
     }
@@ -244,7 +275,7 @@ pub fn plan(base: &Path, account: &Path, own: &[String]) -> Result<Plan> {
     let mut has_skills = false;
     for name in names(base)? {
         let text = name.to_string_lossy();
-        match classify(&text) {
+        match classify_with(&text, lists) {
             Class::Shared => {
                 let want = Want::Link(base.join(&name));
                 let state = lstat(&account.join(&name))?;
@@ -570,11 +601,11 @@ pub fn render_unknown(unknown: &[String]) -> String {
 
 /// The fast check of `ccx @name`: adds missing links and never changes a
 /// conflict. Returns the number of new links and directories.
-pub fn health_check(base: &Account, account: &Account) -> Result<usize> {
+pub fn health_check(base: &Account, account: &Account, lists: &SyncLists) -> Result<usize> {
     if account.is_base {
         return Ok(0);
     }
-    let plan = plan(&base.dir, &account.dir, &account.own)?;
+    let plan = plan(&base.dir, &account.dir, &account.own, lists)?;
     Ok(apply(&plan, Mode::Health)?.changed)
 }
 
@@ -598,10 +629,16 @@ pub fn targets<'a>(config: &'a Config, name: Option<&str>) -> Result<Vec<&'a Acc
     Ok(vec![account])
 }
 
-/// Runs `ccx manage sync`. `name` is `None` for `--all`. Returns false when
-/// CONFLICT items stay unchanged.
-pub fn run(env: &Env, name: Option<&str>, dry_run: bool, force: bool) -> Result<bool> {
-    Ok(run_counted(env, name, dry_run, force)?.ok)
+/// Runs `ccx manage sync`. `name` is `None` for `--all`. With `yes`, sync
+/// asks no questions. Returns false when CONFLICT items stay unchanged.
+pub fn run(env: &Env, name: Option<&str>, dry_run: bool, force: bool, yes: bool) -> Result<bool> {
+    let terminal = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+    let mut prompt = Terminal;
+    let ask: Option<&mut dyn Prompt> = match !dry_run && !yes && terminal {
+        true => Some(&mut prompt),
+        false => None,
+    };
+    Ok(run_counted(env, name, dry_run, force, ask)?.ok)
 }
 
 /// The result of [`run_counted`].
@@ -613,22 +650,50 @@ pub struct Synced {
     pub changed: usize,
 }
 
-/// Runs `ccx manage sync` and returns the number of changes too.
-pub fn run_counted(env: &Env, name: Option<&str>, dry_run: bool, force: bool) -> Result<Synced> {
-    let config = config::load(env)?;
-    let base = config.base();
-    let accounts = targets(&config, name)?;
-    if accounts.is_empty() {
+/// The prompt that asks which unknown base entries to share.
+pub const CHOOSE_PROMPT: &str =
+    "Select the items to share with all accounts (the others are not shared)";
+
+/// Runs `ccx manage sync` and returns the number of changes too. With
+/// `ask`, sync first asks which unknown base entries to share, writes the
+/// answer to `[sync]` in `config.toml`, and then uses the new lists. With
+/// no `ask`, sync asks nothing: the CONFLICT items move only with `force`.
+pub fn run_counted(
+    env: &Env,
+    name: Option<&str>,
+    dry_run: bool,
+    force: bool,
+    mut ask: Option<&mut dyn Prompt>,
+) -> Result<Synced> {
+    let mut config = config::load(env)?;
+    if targets(&config, name)?.is_empty() {
         println!("No accounts to sync. Only the base account is in the config.");
         return Ok(Synced {
             ok: true,
             changed: 0,
         });
     }
+    if let Some(p) = ask.as_deref_mut()
+        && !dry_run
+    {
+        let unknown = unknown_names(&config.base().dir, &config.sync)?;
+        if !unknown.is_empty() {
+            if !choose_shared(env, &unknown, p)? {
+                println!("Cancelled. Nothing changed.");
+                return Ok(Synced {
+                    ok: true,
+                    changed: 0,
+                });
+            }
+            config = config::load(env)?;
+        }
+    }
+    let base = config.base();
+    let accounts = targets(&config, name)?;
 
     let mut plans = Vec::new();
     for account in accounts {
-        let plan = plan(&base.dir, &account.dir, &account.own)?;
+        let plan = plan(&base.dir, &account.dir, &account.own, &config.sync)?;
         // Check the guard also in a dry run, so that the user sees a refusal.
         let guard = Guard::new(&plan.base, &plan.account)?;
         for item in operations(&plan, Mode::Full { conflicts: true }) {
@@ -666,7 +731,7 @@ pub fn run_counted(env: &Env, name: Option<&str>, dry_run: bool, force: bool) ->
                 .count()
         })
         .sum();
-    let apply_conflicts = conflicts > 0 && (force || confirm(conflicts)?);
+    let apply_conflicts = conflicts > 0 && (force || confirm(conflicts, ask)?);
 
     let mut changed = 0;
     for (account, plan) in &plans {
@@ -697,18 +762,109 @@ pub fn run_counted(env: &Env, name: Option<&str>, dry_run: bool, force: bool) ->
     })
 }
 
-/// Asks to move the CONFLICT items. With no terminal, the answer is no.
-fn confirm(conflicts: usize) -> Result<bool> {
-    if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
+/// Asks to move the CONFLICT items. With no prompt, the answer is no. A
+/// cancel is a no.
+fn confirm(conflicts: usize, ask: Option<&mut dyn Prompt>) -> Result<bool> {
+    let Some(p) = ask else {
         return Ok(false);
+    };
+    let prompt = format!("Move {conflicts} CONFLICT items to {BACKUP_DIR}/ and link them?");
+    match p.confirm(&prompt, false) {
+        Ok(answer) => Ok(answer),
+        Err(Stop::Cancel) => Ok(false),
+        Err(Stop::Fail(e)) => Err(e),
     }
-    dialoguer::Confirm::new()
-        .with_prompt(format!(
-            "Move {conflicts} CONFLICT items to {BACKUP_DIR}/ and link them?"
-        ))
-        .default(false)
-        .interact()
-        .map_err(|e| format!("cannot read the answer: {e}"))
+}
+
+/// The top-level base entries that are unknown and are not in `[sync]
+/// share` or `[sync] ignore`, sorted.
+pub fn unknown_names(base: &Path, lists: &SyncLists) -> Result<Vec<String>> {
+    Ok(names(base)?
+        .iter()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| classify_with(name, lists) == Class::Unknown)
+        .collect())
+}
+
+/// Asks which of the `unknown` entries to share. The selected entries go
+/// to `[sync] share`, the others to `[sync] ignore`. Returns false when the
+/// user cancels. Then nothing changed.
+pub fn choose_shared(env: &Env, unknown: &[String], p: &mut dyn Prompt) -> Result<bool> {
+    let picked = match p.multi_select(CHOOSE_PROMPT, unknown) {
+        Ok(picked) => picked,
+        Err(Stop::Cancel) => return Ok(false),
+        Err(Stop::Fail(e)) => return Err(e),
+    };
+    let (share, ignore): (Vec<_>, Vec<_>) = unknown
+        .iter()
+        .enumerate()
+        .partition(|(i, _)| picked.contains(i));
+    let share: Vec<String> = share.into_iter().map(|(_, n)| n.clone()).collect();
+    let ignore: Vec<String> = ignore.into_iter().map(|(_, n)| n.clone()).collect();
+    let written = write_lists(env, &share, &ignore)?;
+    println!(
+        "Wrote {}: {} items to share, {} items not to share",
+        written.display(),
+        share.len(),
+        ignore.len()
+    );
+    Ok(true)
+}
+
+/// Adds `share` and `ignore` to the `[sync]` lists of `config.toml`. The
+/// write keeps the comments, is atomic, and replaces the target when
+/// `config.toml` is a symlink. The new file must load before the write.
+/// Returns the path of the file that it wrote.
+pub fn write_lists(env: &Env, share: &[String], ignore: &[String]) -> Result<PathBuf> {
+    let config_path = config::config_path(env)?;
+    let overlay_path = config::overlay_path(env)?;
+    let mut doc = adopt::read_doc(&config_path)?;
+    add_to_lists(&mut doc, share, ignore)?;
+    let text = doc.to_string();
+    let overlay_text = match fs::read_to_string(&overlay_path) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("cannot read {}: {e}", overlay_path.display())),
+    };
+    let overlay = overlay_text.as_deref().map(|text| Source {
+        path: &overlay_path,
+        text,
+    });
+    let main = Source {
+        path: &config_path,
+        text: &text,
+    };
+    config::parse(&main, overlay.as_ref(), config::home(env)?)?;
+    let mode = fs::metadata(&config_path)
+        .map(|m| m.permissions().mode() & 0o7777)
+        .unwrap_or(0o644);
+    adopt::write_atomic(&config_path, &text, mode)
+}
+
+/// Adds the names to `sync.share` and `sync.ignore` in `doc`. A name that
+/// is in a list already is not added again.
+pub fn add_to_lists(doc: &mut DocumentMut, share: &[String], ignore: &[String]) -> Result<()> {
+    let table = doc
+        .entry("sync")
+        .or_insert_with(|| toml_edit::Item::Table(Table::new()))
+        .as_table_like_mut()
+        .ok_or_else(|| "`sync` must be a table".to_string())?;
+    for (key, names) in [("share", share), ("ignore", ignore)] {
+        if names.is_empty() {
+            continue;
+        }
+        let array = table
+            .entry(key)
+            .or_insert(value(Array::new()))
+            .as_array_mut()
+            .ok_or_else(|| format!("`sync.{key}` must be an array"))?;
+        for name in names {
+            if !array.iter().any(|v| v.as_str() == Some(name)) {
+                array.push(name.as_str());
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -735,7 +891,7 @@ mod tests {
         }
         fn plan(&self, own: &[&str]) -> Plan {
             let own: Vec<String> = own.iter().map(|s| s.to_string()).collect();
-            plan(&self.base(), &self.acct(), &own).unwrap()
+            plan(&self.base(), &self.acct(), &own, &SyncLists::default()).unwrap()
         }
     }
 
@@ -777,9 +933,11 @@ mod tests {
 
     #[test]
     fn own_values() {
-        for good in ["settings.json", "plugins", "skills", "skills/tdd"] {
-            assert!(valid_own(good), "{good}");
+        let share = vec!["notes".to_string()];
+        for good in ["settings.json", "plugins", "skills", "skills/tdd", "notes"] {
+            assert!(valid_own(good, &share), "{good}");
         }
+        assert!(!valid_own("notes", &[]));
         for bad in [
             "projects",
             "chrome",
@@ -789,8 +947,183 @@ mod tests {
             "skills/..",
             "",
         ] {
-            assert!(!valid_own(bad), "{bad}");
+            assert!(!valid_own(bad, &share), "{bad}");
         }
+    }
+
+    #[test]
+    fn list_names_must_be_unknown_top_level_entries() {
+        for good in ["notes", "gh-pr-status-cache.json", "README.md"] {
+            assert_eq!(check_list_name(good), Ok(()), "{good}");
+        }
+        for (bad, why) in [
+            ("", "is not a top-level entry name"),
+            (".", "is not a top-level entry name"),
+            ("..", "is not a top-level entry name"),
+            ("a/b", "is not a top-level entry name"),
+            (".hidden", "is on the never-share list"),
+            ("projects", "is on the never-share list"),
+            ("settings.json", "is a built-in shared item"),
+            ("skills", "is a built-in shared item"),
+        ] {
+            assert_eq!(check_list_name(bad), Err(why), "{bad}");
+        }
+    }
+
+    #[test]
+    fn share_items_link_and_ignore_items_hide() {
+        let t = Tree::new();
+        write(&t.base().join("notes/a.md"), "x");
+        write(&t.base().join("cache.json"), "{}");
+        write(&t.base().join("other"), "x");
+        write(&t.base().join("CLAUDE.md"), "x");
+        let lists = SyncLists {
+            share: vec!["notes".into(), "missing".into()],
+            ignore: vec!["cache.json".into()],
+        };
+        let plan = plan(&t.base(), &t.acct(), &[], &lists).unwrap();
+        assert_eq!(plan.unknown, vec!["other"]);
+        let paths: Vec<_> = plan.items.iter().map(|i| i.path.clone()).collect();
+        // A share item that is not in the base dir is skipped.
+        assert_eq!(
+            paths,
+            vec![PathBuf::from("CLAUDE.md"), PathBuf::from("notes")]
+        );
+        assert_eq!(action(&plan, "notes"), Action::Link);
+        assert_eq!(
+            item(&plan, "notes").want,
+            Want::Link(t.base().join("notes"))
+        );
+        apply(&plan, Mode::Full { conflicts: false }).unwrap();
+        assert_eq!(
+            fs::read_link(t.acct().join("notes")).unwrap(),
+            t.base().join("notes")
+        );
+        assert!(fs::symlink_metadata(t.acct().join("cache.json")).is_err());
+
+        // `own` can name a share item, and a real dir is a CONFLICT.
+        fs::remove_file(t.acct().join("notes")).unwrap();
+        fs::create_dir(t.acct().join("notes")).unwrap();
+        let own = vec!["notes".to_string()];
+        let owned = super::plan(&t.base(), &t.acct(), &own, &lists).unwrap();
+        assert_eq!(action(&owned, "notes"), Action::Skip);
+        let plan = super::plan(&t.base(), &t.acct(), &[], &lists).unwrap();
+        assert_eq!(action(&plan, "notes"), Action::Conflict);
+        assert_eq!(unknown_names(&t.base(), &lists).unwrap(), vec!["other"]);
+    }
+
+    #[test]
+    fn add_to_lists_keeps_comments_and_adds_each_name_once() {
+        let mut doc: DocumentMut = "# my config\n[accounts.main]\ndir = \"~/.claude\" # base\n\n[sync]\nshare = [\"a\"] # kept\n"
+            .parse()
+            .unwrap();
+        add_to_lists(&mut doc, &["a".into(), "b".into()], &["c".into()]).unwrap();
+        let text = doc.to_string();
+        assert!(text.starts_with("# my config\n"), "{text}");
+        assert!(text.contains("dir = \"~/.claude\" # base"), "{text}");
+        assert!(text.contains("share = [\"a\", \"b\"] # kept"), "{text}");
+        assert!(text.contains("ignore = [\"c\"]"), "{text}");
+
+        let mut empty = DocumentMut::new();
+        add_to_lists(&mut empty, &[], &["x".into()]).unwrap();
+        assert_eq!(empty.to_string(), "[sync]\nignore = [\"x\"]\n");
+    }
+
+    /// A temp HOME with a base dir, one account dir and a config.toml
+    /// that is a symlink into a repo dir.
+    struct Home {
+        root: tempfile::TempDir,
+    }
+
+    impl Home {
+        const CONFIG: &str = "# ccx config\n[accounts.main]\ndir = \"~/.claude\"\n\n[accounts.angel2]\ndir = \"~/.claude-angel2\" # second\n";
+
+        fn new() -> Home {
+            let root = tempfile::tempdir().unwrap();
+            let home = root.path();
+            for name in ["notes", "tools", "skills/tdd"] {
+                fs::create_dir_all(home.join(".claude").join(name)).unwrap();
+            }
+            fs::write(home.join(".claude/CLAUDE.md"), "x").unwrap();
+            fs::create_dir(home.join(".claude-angel2")).unwrap();
+            fs::create_dir_all(home.join("repo")).unwrap();
+            fs::write(home.join("repo/config.toml"), Self::CONFIG).unwrap();
+            fs::create_dir_all(home.join(".config/ccx")).unwrap();
+            symlink(
+                home.join("repo/config.toml"),
+                home.join(".config/ccx/config.toml"),
+            )
+            .unwrap();
+            Home { root }
+        }
+        fn path(&self) -> &Path {
+            self.root.path()
+        }
+        fn env(&self) -> Env {
+            [("HOME", self.path().to_str().unwrap())]
+                .into_iter()
+                .collect()
+        }
+    }
+
+    #[test]
+    fn sync_asks_which_items_to_share_and_writes_the_config() {
+        use crate::wizard::fake::{Reply, Script};
+        let h = Home::new();
+        let mut p = Script::new([Reply::Picks(&[0])]);
+        let synced = run_counted(&h.env(), None, false, false, Some(&mut p)).unwrap();
+        assert!(p.done());
+        assert!(p.text_log().contains(CHOOSE_PROMPT));
+        assert!(synced.ok);
+
+        // The write replaced the symlink target and kept the link and the
+        // comments.
+        let link = h.path().join(".config/ccx/config.toml");
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        let text = fs::read_to_string(h.path().join("repo/config.toml")).unwrap();
+        assert!(text.starts_with(Home::CONFIG), "{text}");
+        assert!(
+            text.ends_with("[sync]\nshare = [\"notes\"]\nignore = [\"tools\"]\n"),
+            "{text}"
+        );
+
+        // The sync used the new lists.
+        let acct = h.path().join(".claude-angel2");
+        assert_eq!(
+            fs::read_link(acct.join("notes")).unwrap(),
+            h.path().join(".claude/notes")
+        );
+        assert!(fs::symlink_metadata(acct.join("tools")).is_err());
+
+        // The next sync does not ask again: the script has no replies.
+        let mut p = Script::new([]);
+        run_counted(&h.env(), None, false, false, Some(&mut p)).unwrap();
+        assert!(!p.text_log().contains(CHOOSE_PROMPT));
+    }
+
+    #[test]
+    fn sync_does_not_ask_on_dry_run_or_without_a_prompt_and_esc_changes_nothing() {
+        use crate::wizard::fake::{Reply, Script};
+        let h = Home::new();
+        let config = h.path().join("repo/config.toml");
+        let mut p = Script::new([]);
+        run_counted(&h.env(), None, true, false, Some(&mut p)).unwrap();
+        run_counted(&h.env(), None, false, false, None).unwrap();
+        assert_eq!(fs::read_to_string(&config).unwrap(), Home::CONFIG);
+        let acct = h.path().join(".claude-angel2");
+        assert!(fs::symlink_metadata(acct.join("notes")).is_err());
+
+        fs::remove_file(acct.join("CLAUDE.md")).unwrap();
+        let mut p = Script::new([Reply::Esc]);
+        let synced = run_counted(&h.env(), None, false, false, Some(&mut p)).unwrap();
+        assert_eq!(synced.changed, 0);
+        assert_eq!(fs::read_to_string(&config).unwrap(), Home::CONFIG);
+        assert!(fs::symlink_metadata(acct.join("CLAUDE.md")).is_err());
     }
 
     #[test]
@@ -939,12 +1272,12 @@ mod tests {
         let t = Tree::new();
         let missing = t.root.path().join("nope");
         assert!(
-            plan(&t.base(), &missing, &[])
+            plan(&t.base(), &missing, &[], &SyncLists::default())
                 .unwrap_err()
                 .contains("account directory")
         );
         assert!(
-            plan(&missing, &t.acct(), &[])
+            plan(&missing, &t.acct(), &[], &SyncLists::default())
                 .unwrap_err()
                 .contains("base directory")
         );
@@ -987,7 +1320,7 @@ mod tests {
         assert!(err.contains("inside the base directory"), "{err}");
 
         // apply refuses before it changes a file.
-        let plan = plan(&t.base(), &alias, &[]).unwrap();
+        let plan = plan(&t.base(), &alias, &[], &SyncLists::default()).unwrap();
         assert_eq!(action(&plan, "settings.json"), Action::Conflict);
         let err = apply(&plan, Mode::Full { conflicts: true }).unwrap_err();
         assert!(err.contains("refuse"), "{err}");

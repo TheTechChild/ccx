@@ -44,6 +44,8 @@ Sync never links these items:
 
 All other entries are unknown. Sync shows them in the plan as `UNKNOWN` and does not link them. A new item type from Claude Code stays unknown until a ccx release puts it in a group.
 
+**Update (#55):** the user puts unknown entries into a group with `[sync] share` and `[sync] ignore` in `config.toml`. Sync links a `share` entry like a shared item. An `ignore` entry is not shared and is not unknown. On a terminal, `ccx manage sync` asks which unknown entries to share and writes the answer to these lists. `ccx manage doctor` shows an unknown entry as `INFO`, not as `WARN`.
+
 ### Plan and safety
 
 For each shared item, sync uses `lstat` on the path in the account and shows one action:

@@ -94,7 +94,7 @@ pub fn run(parent: &Env, args: &Args) -> Result<()> {
 
     add::make_dir(&dir)?;
     println!("Made {} (mode 0700)", dir.display());
-    let sync_plan = sync::plan(&config.base().dir, &dir, &[])?;
+    let sync_plan = sync::plan(&config.base().dir, &dir, &[], &config.sync)?;
     print!("{}", sync::render(name, &sync_plan));
     let applied = sync::apply(&sync_plan, sync::Mode::Full { conflicts: false })?;
     println!("Sync made {} changes.", applied.changed);

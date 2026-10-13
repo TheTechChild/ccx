@@ -87,6 +87,7 @@ complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcomma
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from sync" -l all -d 'Sync all accounts other than the base account'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from sync" -l dry-run -d 'Show the plan and change nothing'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from sync" -l force -d 'Move CONFLICT items to the backup without a prompt'
+complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from sync" -s y -l yes -d 'Ask no questions. Unknown items stay not shared, and CONFLICT items move only with --force'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from sync" -l prefs -d 'Copy the user MCP servers and the allowlisted preferences of the base account. Do not link'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from sync" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from doctor" -l json -d 'Print the results as JSON'

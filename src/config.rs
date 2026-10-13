@@ -32,6 +32,18 @@ pub struct Config {
     /// Prices per model from `[pricing.<model>]` (#24). They override the
     /// built-in price table of `ccx manage spend`.
     pub pricing: BTreeMap<String, Price>,
+    /// The `[sync]` lists of top-level base entries (#55).
+    pub sync: SyncLists,
+}
+
+/// The `[sync]` table: unknown top-level entries of the base dir that the
+/// user chose to share or not to share (#55).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SyncLists {
+    /// Entries that sync links like a built-in shared item.
+    pub share: Vec<String>,
+    /// Entries that sync does not share and does not show as unknown.
+    pub ignore: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -155,6 +167,14 @@ struct RawConfig {
     prefs: Option<RawPrefs>,
     #[serde(default)]
     pricing: BTreeMap<String, RawPrice>,
+    sync: Option<RawSync>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSync {
+    share: Option<Vec<String>>,
+    ignore: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -347,6 +367,7 @@ fn merge(base: &mut toml::Table, overlay: toml::Table) {
 
 fn build(raw: RawConfig, home: &OsStr) -> Result<Config> {
     let base_dir = canonical(BASE_DIR, home);
+    let sync = sync_lists(raw.sync.unwrap_or_default())?;
     let mut accounts = Vec::new();
     let mut dirs = BTreeSet::new();
     for (name, account) in raw.accounts {
@@ -385,7 +406,10 @@ fn build(raw: RawConfig, home: &OsStr) -> Result<Config> {
             ));
         }
         let own = account.own.unwrap_or_default();
-        if let Some(item) = own.iter().find(|item| !crate::sync::valid_own(item)) {
+        if let Some(item) = own
+            .iter()
+            .find(|item| !crate::sync::valid_own(item, &sync.share))
+        {
             return Err(format!(
                 "accounts.{name}.own: `{item}` is not a shared item or `skills/<name>`"
             ));
@@ -468,7 +492,29 @@ fn build(raw: RawConfig, home: &OsStr) -> Result<Config> {
             deny: prefs.deny.unwrap_or_default(),
         },
         pricing,
+        sync,
     })
+}
+
+/// Validates the `[sync]` lists. Each name is a top-level entry that is
+/// not in a built-in group, and no name is in the two lists.
+fn sync_lists(raw: RawSync) -> Result<SyncLists> {
+    let lists = SyncLists {
+        share: raw.share.unwrap_or_default(),
+        ignore: raw.ignore.unwrap_or_default(),
+    };
+    for (key, names) in [("share", &lists.share), ("ignore", &lists.ignore)] {
+        for name in names {
+            crate::sync::check_list_name(name)
+                .map_err(|why| format!("sync.{key}: `{name}` {why}"))?;
+        }
+    }
+    if let Some(name) = lists.share.iter().find(|n| lists.ignore.contains(n)) {
+        return Err(format!(
+            "sync.share and sync.ignore: `{name}` is in the two lists; remove it from one list"
+        ));
+    }
+    Ok(lists)
 }
 
 /// The key source of an account from `kind`, `key_store` and
@@ -783,6 +829,51 @@ mod tests {
         assert_eq!(config.pick.session_avoid, 80);
         assert_eq!(config.pick.scoped_avoid, 100);
         assert_eq!(config.usage.refresh_min_gap_secs, 3);
+    }
+
+    #[test]
+    fn sync_lists_load_and_default_to_empty() {
+        assert_eq!(parse_ok(MINIMAL).sync, SyncLists::default());
+        let config = parse_ok(&format!(
+            "{MINIMAL}\n[sync]\nshare = [\"notes\"]\nignore = [\"gh-pr-status-cache.json\"]\n"
+        ));
+        assert_eq!(config.sync.share, ["notes"]);
+        assert_eq!(config.sync.ignore, ["gh-pr-status-cache.json"]);
+    }
+
+    #[test]
+    fn sync_list_names_are_unknown_top_level_entries() {
+        for (key, name, why) in [
+            ("share", "", "is not a top-level entry name"),
+            ("share", "a/b", "is not a top-level entry name"),
+            ("ignore", ".", "is not a top-level entry name"),
+            ("ignore", "..", "is not a top-level entry name"),
+            ("share", ".claude.json", "is on the never-share list"),
+            ("ignore", "projects", "is on the never-share list"),
+            ("share", "settings.json", "is a built-in shared item"),
+            ("ignore", "skills", "is a built-in shared item"),
+        ] {
+            let e = parse_err(&format!("{MINIMAL}\n[sync]\n{key} = [\"{name}\"]\n"));
+            assert!(e.contains(&format!("sync.{key}: `{name}` {why}")), "{e}");
+        }
+        let e = parse_err(&format!(
+            "{MINIMAL}\n[sync]\nshare = [\"a\", \"b\"]\nignore = [\"b\"]\n"
+        ));
+        assert!(
+            e.contains("sync.share and sync.ignore: `b` is in the two lists"),
+            "{e}"
+        );
+        let e = parse_err(&format!("{MINIMAL}\n[sync]\nother = []\n"));
+        assert!(e.contains("other"), "{e}");
+    }
+
+    #[test]
+    fn own_can_name_a_share_item() {
+        let text = "\n[accounts.work]\ndir = \"~/.claude-work\"\nown = [\"notes\"]\n";
+        let e = parse_err(&format!("{MINIMAL}{text}"));
+        assert!(e.contains("accounts.work.own: `notes`"), "{e}");
+        let config = parse_ok(&format!("{MINIMAL}{text}\n[sync]\nshare = [\"notes\"]\n"));
+        assert_eq!(config.account("work").unwrap().own, ["notes"]);
     }
 
     #[test]

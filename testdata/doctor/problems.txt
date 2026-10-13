@@ -5,10 +5,10 @@ WARN  path: angel2: the dir `~/.claude-angel2/` is not canonical; write `~/.clau
 OK    path: angel2: ~/.claude-angel2
 OK    path: main: ~/.claude
 WARN  stray: ~/.claude/.claude.json is a stray file; `ccx manage adopt` moves it to a backup
-WARN  unknown: new-dir in ~/.claude is not on the share list or the never-share list
+INFO  unknown: new-dir in ~/.claude is not shared; run `ccx manage sync --all` to choose
 FAIL  link: angel2: settings.json is a real file, not a link to the base; `ccx manage sync angel2 --force` moves it to a backup and links it
 WARN  skill: local-only skill my-local in angel2; promote to base?
 WARN  home-path: ~/.claude/settings.json: hooks.Stop[0].hooks[0].command uses the absolute home path; write `$HOME/.claude/hooks/notify.sh`
-WARN  keychain: orphan keychain item `Claude Code-credentials-0badf00d` matches no account dir
+INFO  keychain: orphan keychain item `Claude Code-credentials-0badf00d` matches no account dir
 
-4 OK, 7 WARN, 1 FAIL
+4 OK, 2 INFO, 5 WARN, 1 FAIL
