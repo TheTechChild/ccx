@@ -36,8 +36,8 @@ Each archive also has the static completion files in `completions/`: `_ccx` (zsh
 
 ## Quick start
 
-1. Log in to each account with `claude auth login`. The base account uses `~/.claude`. Each other account uses its own directory, for example `CLAUDE_CONFIG_DIR=~/.claude-angel2 claude auth login`.
-2. Add the accounts to the ccx config: `ccx manage adopt`.
+1. Add the accounts that are on this machine already. These are the directories that you logged in to with `claude auth login`. The base account uses `~/.claude`. Each other account uses its own directory, for example `~/.claude-angel2`. Run `ccx manage adopt` to add them to the ccx config.
+2. Add each new account: `ccx manage add NAME`. Add makes the directory `~/.claude-NAME`, links the shared setup of the base account, runs `claude auth login` and writes the config. Run `ccx manage add` with no NAME to start the wizard. Refer to [Add a new account](#add-a-new-account). For an Anthropic API key, refer to [Add an API-key account](#add-an-api-key-account).
 3. Add completions and aliases to your shell profile: `eval "$(ccx manage shell-init zsh)"`. For example, `aliases = ["claude2"]` in account `angel2` gives `alias claude2='ccx @angel2'`.
 4. Start Claude Code:
    - `ccx` selects the account that has the most capacity available.
