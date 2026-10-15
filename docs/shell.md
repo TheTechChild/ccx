@@ -1,25 +1,27 @@
 # Add completions and aliases to your shell
 
-`ccx manage shell-init` prints shell code. Add one line to your shell profile:
+`ccx manage shell-init` prints shell code: completions for `ccx` and one alias for each name in `aliases`. Add one line to your shell profile:
 
 ```sh
-eval "$(ccx manage shell-init zsh)"     # ~/.zshrc. Put this line after compinit.
+eval "$(ccx manage shell-init zsh)"     # ~/.zshrc, after compinit
 eval "$(ccx manage shell-init bash)"    # ~/.bashrc
 ccx manage shell-init fish | source     # ~/.config/fish/config.fish
 ```
 
-The output has two parts:
+Shell-init prints completions for `ccx` commands, `manage` subcommands and one `@name` token for each account. It prints an alias for each `aliases = [...]` name in `config.toml`: `aliases = ["claude2"]` in account `angel2` gives `alias claude2='ccx @angel2'`. Without `config.toml`, shell-init prints only completions.
 
-1. Completions for `ccx`: the commands, the `manage` subcommands and one `@name` token for each account.
-2. One alias for each name in `aliases = [...]` in `config.toml`. For example, `aliases = ["claude2"]` in account `angel2` gives `alias claude2='ccx @angel2'`.
+## Alias rules
 
-Shell-init never makes an alias or a function for `claude`. The bare `claude` command stays on the base account. An alias name must be a shell identifier: letters, digits and `_`, and not a digit first. Shell-init also refuses the names `claude` and `ccx`, and an alias name that two accounts use. When an alias name is not valid, shell-init prints an error and no shell code, and exits with a non-zero code. When `config.toml` does not exist, shell-init prints only the completions.
+- Shell-init never makes an alias or a function for `claude`. Bare `claude` stays on the base account.
+- Alias names use letters, digits and `_`, and not a digit first.
+- Shell-init refuses `claude`, `ccx` and a name that two accounts use.
+- A name that is not valid gives an error, no shell code and a non-zero exit code.
 
 ## Replace a hand-written alias
 
-If your profile has a hand-written alias, for example `alias claude2='CLAUDE_CONFIG_DIR=~/.claude-angel2 claude'`, do these steps:
+To replace `alias claude2='CLAUDE_CONFIG_DIR=~/.claude-angel2 claude'`:
 
-1. Add the alias name to the account in `config.toml`: `aliases = ["claude2"]`.
-2. Add the shell-init line to your shell profile.
-3. Remove the hand-written alias from your profile.
-4. Start a new shell. Make sure that `alias claude2` shows `ccx @angel2`, and that `type claude` shows the `claude` program, not an alias.
+1. Add `aliases = ["claude2"]` to the account in `config.toml`.
+2. Add the shell-init line.
+3. Remove the hand-written alias.
+4. In a new shell, check that `alias claude2` shows `ccx @angel2` and `type claude` shows the `claude` program, not an alias.
