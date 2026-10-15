@@ -24,6 +24,8 @@ CCX_UPDATE_GOLDEN=1 mise run test    # Write the golden files again. Examine the
 
 `mise run ci` must pass before you push.
 
+The completion files in `completions/` come from the CLI definition. A test fails when they do not agree with the CLI. To update them, run `CCX_UPDATE_GOLDEN=1 mise run test` and check the diff.
+
 ## Tests and safety rules
 
 - Tests never use your real accounts. Each test uses a temporary `HOME` and the fake programs in `testdata/fakebin/` (`claude`, `security`, `secret-tool`, `launchctl`, `systemctl` and `loginctl`).
@@ -37,7 +39,7 @@ Refer to [AGENTS.md](AGENTS.md) for the full list of rules.
 
 1. Open an issue first. Tell what to change and why. For a feature, write the acceptance criteria.
 2. Make a branch from an up-to-date `main`. Name it `issue-N-<slug>`, for example `issue-42-status-colors`.
-3. Make the change with tests. Update the README and the ADRs when the behavior changes.
+3. Make the change with tests. Update the files in `docs/`, the README and the ADRs when the behavior changes.
 4. Use [conventional commits](https://www.conventionalcommits.org/), for example `fix(sync): ...`. In the commit message body, write one sentence for each file in the commit. Do not add attribution lines such as `Co-Authored-By`.
 5. Open one pull request for each issue, with base `main`. In the body, write `Closes #N` and the acceptance criteria as a checked list.
 6. CI must be green on macOS and Linux before merge.
@@ -55,4 +57,14 @@ The architecture decisions are in [`docs/adr/`](docs/adr/). Add an ADR when you 
 
 ## Make a release
 
-The maintainer makes the releases with cargo-dist. Refer to [Make a release](README.md#make-a-release) in the README.
+[cargo-dist](https://opensource.axo.dev/cargo-dist/) makes the release. The config is in `dist-workspace.toml`. The workflow is `.github/workflows/release.yml`. Do not edit the workflow by hand. Change `dist-workspace.toml` and run `mise exec -- dist generate`.
+
+The release workflow does not use mise. It uses rustup on each runner, and rustup reads the Rust version from `rust-toolchain.toml`. When you change the Rust version in `mise.toml`, change it in `rust-toolchain.toml` too.
+
+In these steps, `vX.Y.Z` is the new version, for example `v0.1.3`.
+
+1. Make a pull request that sets `version = "X.Y.Z"` in `Cargo.toml`, updates `Cargo.lock` (`mise exec -- cargo check`) and sets the version in the status line of the README. Use the commit message `chore(release): prepare vX.Y.Z`. Merge it when CI is green.
+2. Update your local `main`: `git switch main && git pull`.
+3. Make sure that the plan is correct: `mise exec -- dist plan`.
+4. Push a tag for the version: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+5. The release workflow builds the archives for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu`, and makes the GitHub release with the archives and `sha256.sum`.

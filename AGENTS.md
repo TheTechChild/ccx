@@ -6,7 +6,7 @@ These are the instructions for coding agents that work on ccx. `CLAUDE.md` impor
 
 ccx is a Rust command-line tool. It starts Claude Code (`claude`) on the account that has the most usage available, or on the account that you name with `@name`. Each account is one Claude Code configuration directory. ccx also manages the accounts: adopt, add, sync, login, handoff of sessions, and a background usage refresh.
 
-[README.md](README.md) tells how ccx works for users. [PLAN.md](PLAN.md) has the project history and the design decisions.
+[README.md](README.md) tells new users how to install and start ccx. The files in [`docs/`](docs/) tell how each command works. [PLAN.md](PLAN.md) has the project history and the design decisions.
 
 ## Commands
 
@@ -89,7 +89,7 @@ The binary is `src/main.rs`. It has no library crate.
 2. **Real accounts.** Tests never use the real `~/.claude`, `~/.claude-*`, `~/.claude.json`, the real keychain or a real service manager. Use a temporary `HOME` and the fakes in `testdata/fakebin/`. During development, run only read-only commands on real accounts. Do not run sync, adopt, add, handoff, login, logout, rm, bootstrap or service install on a real account.
 3. **Privacy.** Do not put a real email address in a file, a fixture, a commit, an issue or a pull request. Use `*@example.com` addresses. `mise run check-emails` scans all tracked files and all commits.
 4. **Canonical paths.** Claude Code keys an account by the exact text of its config directory. Use `paths::canonical` for account dirs: absolute, with no trailing slash, and with no symlink resolution. Do not set `CLAUDE_CONFIG_DIR` for the base account `~/.claude` ([ADR 0001](docs/adr/0001-one-account-per-config-directory.md)).
-5. **Never-share list.** Sync never shares the items in `NEVER` in `src/sync.rs` or a dotfile. Do not remove an item from `NEVER` without a new ADR. When you change `SHARED` or `NEVER`, update [ADR 0008](docs/adr/0008-sync-share-lists.md) and the README.
+5. **Never-share list.** Sync never shares the items in `NEVER` in `src/sync.rs` or a dotfile. Do not remove an item from `NEVER` without a new ADR. When you change `SHARED` or `NEVER`, update [ADR 0008](docs/adr/0008-sync-share-lists.md) and [docs/sync.md](docs/sync.md).
 6. **No data loss.** Sync, adopt and `rm --purge` move user files to a backup or a trash directory. Sync never deletes through a symlink: `RELINK` removes only the link. Handoff never changes a file of the source account.
 7. **Fast launch.** The launch path must stay fast. Do not add network calls or slow work before `exec` of `claude`.
 8. **Few dependencies.** Add a crate only when it is necessary. Write simple, idiomatic Rust with tests.
@@ -108,4 +108,6 @@ The architecture decisions are in [`docs/adr/`](docs/adr/). Read the ADRs before
 
 ## Documentation
 
-Write the docs (README, ADRs, these files) and the user-facing text in ASD-STE100 Simplified Technical English: short sentences, one instruction in each sentence, the active voice, and simple words. Make sure that each command, file path, module name, environment variable and config key in the docs exists in the code.
+Keep the README short: install, the quick start and links. Put the reference text for each command in its file in `docs/`. When the behavior changes, update that file.
+
+Write the docs (README, `docs/`, ADRs, these files) and the user-facing text in ASD-STE100 Simplified Technical English: short sentences, one instruction in each sentence, the active voice, and simple words. Make sure that each command, file path, module name, environment variable and config key in the docs exists in the code.
