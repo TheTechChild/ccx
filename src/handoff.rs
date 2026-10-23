@@ -406,40 +406,56 @@ pub fn open_pid(dir: &Path, id: &str) -> Option<u32> {
 /// its `pid` is a live process and the start time agrees with `procStart`.
 /// ccx reads only the `<pid>.json` files, never the `*.key` files.
 pub fn running_pid(dir: &Path, matches: impl Fn(&Value) -> bool) -> Option<u32> {
-    let entries = fs::read_dir(dir.join("sessions")).ok()?;
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        if !name.to_str().is_some_and(is_session_file) {
-            continue;
-        }
-        let Ok(text) = fs::read(entry.path()) else {
-            continue;
-        };
-        let Ok(value) = serde_json::from_slice::<Value>(&text) else {
-            continue;
-        };
-        if !matches(&value) {
-            continue;
-        }
-        let Some(pid) = value
-            .get("pid")
-            .and_then(Value::as_u64)
-            .and_then(|p| u32::try_from(p).ok())
-        else {
-            continue;
-        };
-        let proc_start = value.get("procStart").and_then(Value::as_str);
-        if is_running(pid, proc_start) {
-            return Some(pid);
-        }
-    }
-    None
+    session_files(dir)
+        .into_iter()
+        .filter(|value| matches(value))
+        .filter_map(|value| {
+            let pid = pid_of(&value)?;
+            let proc_start = value.get("procStart").and_then(Value::as_str);
+            is_running(pid, proc_start).then_some(pid)
+        })
+        .next()
 }
 
-/// True when `pid` is a live process and its start time agrees with
-/// `proc_start`. When ccx cannot get the start time, it uses only the
-/// pid check.
-fn is_running(pid: u32, proc_start: Option<&str>) -> bool {
+/// The number of running sessions in the account directory `dir`, for
+/// automatic selection. The launch path must stay fast, so this count
+/// uses only the pid check and not `ps` for each session. A pid that the
+/// system used again can thus count as a running session. That error only
+/// makes the score of the account a little lower.
+pub fn running_count(dir: &Path) -> u32 {
+    let count = session_files(dir)
+        .iter()
+        .filter_map(pid_of)
+        .filter(|&pid| is_alive(pid))
+        .count();
+    u32::try_from(count).unwrap_or(u32::MAX)
+}
+
+/// The values of the `sessions/<pid>.json` files in `dir`. ccx never reads
+/// the `*.key` files. It skips a file that it cannot read or parse.
+fn session_files(dir: &Path) -> Vec<Value> {
+    let Ok(entries) = fs::read_dir(dir.join("sessions")) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.file_name().to_str().is_some_and(is_session_file))
+        .filter_map(|entry| fs::read(entry.path()).ok())
+        .filter_map(|text| serde_json::from_slice::<Value>(&text).ok())
+        .collect()
+}
+
+/// The `pid` field of a `sessions/<pid>.json` value.
+fn pid_of(value: &Value) -> Option<u32> {
+    value
+        .get("pid")
+        .and_then(Value::as_u64)
+        .and_then(|p| u32::try_from(p).ok())
+}
+
+/// True when `pid` is a live process. `EPERM` means that the process
+/// exists but belongs to a different user.
+fn is_alive(pid: u32) -> bool {
     let Ok(pid_t) = libc::pid_t::try_from(pid) else {
         return false;
     };
@@ -447,9 +463,15 @@ fn is_running(pid: u32, proc_start: Option<&str>) -> bool {
         return false;
     }
     // SAFETY: signal 0 sends nothing. It only checks the pid.
-    let alive = unsafe { libc::kill(pid_t, 0) } == 0
-        || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
-    if !alive {
+    let result = unsafe { libc::kill(pid_t, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// True when `pid` is a live process and its start time agrees with
+/// `proc_start`. When ccx cannot get the start time, it uses only the
+/// pid check.
+fn is_running(pid: u32, proc_start: Option<&str>) -> bool {
+    if !is_alive(pid) {
         return false;
     }
     match (proc_start, process_start(pid)) {
@@ -968,6 +990,28 @@ not json "slug"
         assert!(!is_session_file("12345.json.key"));
         assert!(!is_session_file(".json"));
         assert!(!is_session_file("x.json"));
+    }
+
+    #[test]
+    fn running_count_counts_live_pids_only() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(running_count(dir.path()), 0);
+        let sessions = dir.path().join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        // A child that has exited and was waited for has a dead pid.
+        let mut child = Command::new("true").spawn().unwrap();
+        let dead = child.id();
+        child.wait().unwrap();
+        let live = std::process::id();
+        for (name, pid) in [("1.json", live), ("2.json", live), ("3.json", dead)] {
+            let value = serde_json::json!({"pid": pid, "sessionId": name});
+            fs::write(sessions.join(name), value.to_string()).unwrap();
+        }
+        fs::write(sessions.join("4.json"), "{bad").unwrap();
+        fs::write(sessions.join("5.json"), r#"{"sessionId": "no pid"}"#).unwrap();
+        let key = serde_json::json!({"pid": live}).to_string();
+        fs::write(sessions.join("6.0123.key"), key).unwrap();
+        assert_eq!(running_count(dir.path()), 2);
     }
 
     #[test]

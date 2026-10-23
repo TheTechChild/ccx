@@ -56,6 +56,7 @@ The binary is `src/main.rs`. It has no library crate.
 | `src/doctor.rs` | `ccx manage doctor`: check the setup. It only reads. |
 | `src/handoff.rs` | `ccx handoff`: copy a session to a different account and resume it there. |
 | `src/resume.rs` | The automatic handoff on `ccx -c`, `ccx --continue` and `ccx --resume <id>`. |
+| `src/limit_hit.rs` | A usage-limit hit at the end of a session transcript (ADR 0013). |
 | `src/wizard.rs` | The multi-step `dialoguer` prompts of the `ccx manage` commands. |
 
 ## How to test

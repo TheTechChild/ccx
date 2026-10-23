@@ -48,6 +48,7 @@ The GitHub issue is the specification for each step. All issues in this table ar
 | 24 | #24 | Follow-up: monthly spend report for API-key accounts | v0.1.0 |
 | 25 | #55 | Doctor `INFO` for unknown items and orphan keychain items; sync asks which unknown items to share | v0.1.2 |
 | 26 | #58 | Contributor docs: `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, README and PLAN.md updates | after v0.1.2 |
+| 27 | - | Session limits: named-launch warning, running sessions in the score, limit hits from transcripts (ADR 0013) | after v0.1.2 |
 
 ## Architecture decisions
 
@@ -63,6 +64,7 @@ The GitHub issue is the specification for each step. All issues in this table ar
 - [ADR 0010](docs/adr/0010-api-key-store.md): API-key accounts keep their keys through the OS commands `security` and `secret-tool`, not the `keyring` crate.
 - [ADR 0011](docs/adr/0011-wizards-with-dialoguer.md): the `ccx manage` wizards use multi-step `dialoguer` prompts (decision D6). ccx adds no TUI crate.
 - [ADR 0012](docs/adr/0012-no-direct-usage-api.md): ccx does not call `/api/oauth/usage` directly (decision D6). That call needs the OAuth token, and ccx never reads credentials (ADR 0002).
+- [ADR 0013](docs/adr/0013-session-limit-awareness.md): `ccx @name` warns about a limited account, running sessions share the score of an account, and a usage-limit hit at the end of a transcript limits the account until the reset.
 
 ## Design decisions
 

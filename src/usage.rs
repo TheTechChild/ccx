@@ -88,6 +88,10 @@ pub enum Source {
     Usage,
     #[serde(rename = "cachedUsageUtilization")]
     Cached,
+    /// A usage-limit hit at the end of a transcript (ADR 0013). ccx never
+    /// writes it to the cache.
+    #[serde(rename = "transcript")]
+    Transcript,
 }
 
 impl Source {
@@ -95,6 +99,7 @@ impl Source {
         match self {
             Source::Usage => "/usage",
             Source::Cached => "cachedUsageUtilization",
+            Source::Transcript => "transcript",
         }
     }
 }
@@ -411,6 +416,40 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     era * 146_097 + day_of_era - 719_468
 }
 
+/// The date for a number of days since 1970-01-01 (the inverse of
+/// `days_from_civil`).
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    (year, month, day)
+}
+
+/// RFC 3339 text in UTC with whole seconds, for example
+/// `2026-01-01T05:00:00Z`.
+pub fn format_rfc3339(ms: i64) -> String {
+    let secs = ms.div_euclid(1000);
+    let (year, month, day) = civil_from_days(secs.div_euclid(86_400));
+    let rest = secs.rem_euclid(86_400);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    )
+}
+
 /// A short duration: `45s`, `12m`, `3h05m` or `2d4h`.
 pub fn short_duration(ms: i64) -> String {
     let secs = ms.max(0) / 1000;
@@ -670,6 +709,22 @@ mod tests {
         ] {
             assert_eq!(parse_rfc3339_ms(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn rfc3339_format_is_the_inverse_of_the_parser() {
+        for text in [
+            "1970-01-01T00:00:00Z",
+            "2000-02-29T12:34:56Z",
+            "2026-01-01T05:00:00Z",
+            "2026-12-31T23:59:59Z",
+            "2100-03-01T00:00:00Z",
+        ] {
+            let ms = parse_rfc3339_ms(text).unwrap();
+            assert_eq!(format_rfc3339(ms), text);
+        }
+        // Milliseconds are cut off.
+        assert_eq!(format_rfc3339(1_500), "1970-01-01T00:00:01Z");
     }
 
     #[test]

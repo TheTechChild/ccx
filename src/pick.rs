@@ -30,6 +30,9 @@ pub struct Candidate {
     /// True for an API-key account (#20). The picker never selects it. It
     /// is only a paid fallback when all subscription accounts are limited.
     pub paid: bool,
+    /// The number of running Claude Code sessions in the account (ADR
+    /// 0013). They share the usage windows of the account.
+    pub running: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -175,7 +178,9 @@ fn frees_at(
         .try_fold(i64::MIN, |latest, at| Some(latest.max(at?)))
 }
 
-/// Remaining capacity × weight. Unknown usage counts as 50% used.
+/// Remaining capacity × weight, divided by the number of sessions that
+/// will share it: the running sessions and the new session (ADR 0013).
+/// Unknown usage counts as 50% used.
 pub fn score(candidate: &Candidate, now_ms: u64) -> f64 {
     let used = match &candidate.usage {
         None => UNKNOWN_PERCENT,
@@ -185,7 +190,7 @@ pub fn score(candidate: &Candidate, now_ms: u64) -> f64 {
             .map(|l| current(l, now_ms))
             .fold(0.0, f64::max),
     };
-    (100.0 - used).max(0.0) * candidate.weight
+    (100.0 - used).max(0.0) * candidate.weight / (f64::from(candidate.running) + 1.0)
 }
 
 /// Picks an account. Returns `None` only when there are no candidates.
@@ -267,6 +272,59 @@ pub fn paid_offer(candidates: &[Candidate], decision: Option<&Decision>) -> Opti
     candidates.iter().position(|c| c.paid)
 }
 
+/// Adds a usage-limit hit from a transcript to the usage of the candidate
+/// (ADR 0013). The hit fills its window to 100% until the reset. ccx uses
+/// the hit only when it is newer than the usage data.
+pub fn apply_hit(candidate: &mut Candidate, hit: &crate::limit_hit::Hit) {
+    let limit = hit.limit();
+    match &mut candidate.usage {
+        Some(usage) if usage.fetched_at_ms as i64 >= hit.at_ms => {}
+        Some(usage) => {
+            usage
+                .limits
+                .retain(|l| !(l.kind == limit.kind && l.scope == limit.scope));
+            usage.limits.push(limit);
+        }
+        None => {
+            candidate.usage = Some(Snapshot {
+                source: Source::Transcript,
+                fetched_at_ms: u64::try_from(hit.at_ms).unwrap_or(0),
+                limits: vec![limit],
+            });
+        }
+    }
+}
+
+/// The warning for `ccx @name` on a limited account, for example
+/// `ccx: warning: angel2 is limited (5h 100%); it frees 17:30 (1h16m).
+/// Run ccx with no @name to pick an account.` `None` when the account is
+/// not limited.
+pub fn named_warning(
+    candidate: &Candidate,
+    pick: &config::Pick,
+    model: Option<&str>,
+    now_ms: u64,
+    clock: impl Fn(i64) -> Option<Clock>,
+) -> Option<String> {
+    let usage = candidate.usage.as_ref()?;
+    if candidate.paid || !limited(Some(usage), pick, model, now_ms) {
+        return None;
+    }
+    let frees = match frees_at(usage, pick, model, now_ms) {
+        Some(at) => format!(
+            "it frees {} ({})",
+            time_text(at, now_ms, &clock),
+            usage::short_duration(at - now_ms as i64)
+        ),
+        None => "the reset time is unknown".to_string(),
+    };
+    Some(format!(
+        "ccx: warning: {} is limited ({}); {frees}. Run ccx with no @name to pick an account.",
+        candidate.name,
+        limit_text(usage, pick, model, now_ms)
+    ))
+}
+
 /// The data that ccx reads for one account from its files.
 pub fn candidate(account: &Account, home: &OsStr) -> Candidate {
     if account.is_paid() {
@@ -277,6 +335,7 @@ pub fn candidate(account: &Account, home: &OsStr) -> Candidate {
             usage: None,
             settings_model: None,
             paid: true,
+            running: 0,
         };
     }
     let claude_json: Option<Value> = fs::read(usage::claude_json_path(account, home))
@@ -316,6 +375,7 @@ pub fn candidate(account: &Account, home: &OsStr) -> Candidate {
         usage,
         settings_model,
         paid: false,
+        running: crate::handoff::running_count(&account.dir),
     }
 }
 
@@ -425,7 +485,7 @@ pub fn all_limited_warning(
 }
 
 /// The banner line, for example
-/// `ccx → angel2 · 5h 23% · wk 61% (resets Thu 09:00) · /usage 4m`.
+/// `ccx → angel2 · 5h 23% · wk 61% (resets Thu 09:00) · 1 running · /usage 4m`.
 pub fn banner(candidate: &Candidate, now_ms: u64, clock: impl Fn(i64) -> Option<Clock>) -> String {
     if candidate.paid {
         return crate::paid::banner(&candidate.name);
@@ -453,9 +513,13 @@ pub fn banner(candidate: &Candidate, now_ms: u64, clock: impl Fn(i64) -> Option<
             None => format!("wk {:.0}%", current(l, now_ms)),
         });
     }
+    if candidate.running > 0 {
+        parts.push(format!("{} running", candidate.running));
+    }
     let source = match usage.source {
         Source::Usage => "/usage",
         Source::Cached => "cached",
+        Source::Transcript => "transcript",
     };
     let age = usage::short_duration(now_ms.saturating_sub(usage.fetched_at_ms) as i64);
     parts.push(format!("{source} {age}"));
@@ -534,6 +598,7 @@ mod tests {
             }),
             settings_model: None,
             paid: false,
+            running: 0,
         }
     }
 
@@ -975,6 +1040,95 @@ mod tests {
         assert_eq!(
             all_limited_warning("angel2", None, NOW, utc),
             "ccx: warning: all accounts limited; angel2 reset time is unknown"
+        );
+    }
+
+    #[test]
+    fn running_sessions_share_the_score() {
+        let mut a = known("angel2", 5.0, vec![window(Kind::Session, 10.0, Some(2))]);
+        let b = known("main", 5.0, vec![window(Kind::Session, 40.0, Some(2))]);
+        assert_eq!(score(&a, NOW), 450.0);
+        a.running = 2;
+        assert_eq!(score(&a, NOW), 150.0);
+        let candidates = [a.clone(), b];
+        let decision = pick(&candidates, Some("angel2"), None, &cfg(), NOW).unwrap();
+        assert_eq!(candidates[decision.index].name, "main");
+        // The banner shows the running sessions.
+        assert_eq!(
+            banner(&a, NOW, utc),
+            "ccx → angel2 · 5h 10% · 2 running · /usage 4m"
+        );
+    }
+
+    fn hit(at_ms: i64, resets_in_hours: i64) -> crate::limit_hit::Hit {
+        crate::limit_hit::Hit {
+            uuid: "00000000-0000-4000-8000-000000000001".into(),
+            at_ms,
+            resets_at_ms: NOW as i64 + resets_in_hours * HOUR,
+            limit_type: "five_hour".into(),
+        }
+    }
+
+    #[test]
+    fn a_newer_hit_fills_its_window() {
+        let mut c = known(
+            "angel2",
+            5.0,
+            vec![
+                window(Kind::Session, 10.0, Some(2)),
+                window(Kind::WeeklyAll, 20.0, Some(48)),
+            ],
+        );
+        // The usage data is 4 minutes old. A hit 1 minute ago is newer.
+        apply_hit(&mut c, &hit(NOW as i64 - 60_000, 2));
+        assert!(limited(c.usage.as_ref(), &cfg(), None, NOW));
+        assert_eq!(score(&c, NOW), 0.0);
+        let usage = c.usage.as_ref().unwrap();
+        assert_eq!(usage.limits.len(), 2);
+        assert_eq!(usage.get(Kind::Session).unwrap().percent, 100.0);
+        assert_eq!(usage.get(Kind::WeeklyAll).unwrap().percent, 20.0);
+        assert_eq!(limit_text(usage, &cfg(), None, NOW), "5h 100%".to_string());
+    }
+
+    #[test]
+    fn an_older_hit_does_not_change_the_usage() {
+        let mut c = known("angel2", 5.0, vec![window(Kind::Session, 10.0, Some(2))]);
+        let before = c.clone();
+        apply_hit(&mut c, &hit(NOW as i64 - 10 * 60_000, 2));
+        assert_eq!(c, before);
+    }
+
+    #[test]
+    fn a_hit_gives_usage_to_an_account_with_no_usage() {
+        let mut c = unknown("angel2", 5.0);
+        apply_hit(&mut c, &hit(NOW as i64 - 60_000, 2));
+        let usage = c.usage.as_ref().unwrap();
+        assert_eq!(usage.source, Source::Transcript);
+        assert!(limited(Some(usage), &cfg(), None, NOW));
+        assert!(banner(&c, NOW, utc).ends_with(" · transcript 1m"));
+    }
+
+    #[test]
+    fn named_warning_text() {
+        let c = known("angel2", 5.0, vec![window(Kind::Session, 95.0, Some(2))]);
+        assert_eq!(
+            named_warning(&c, &cfg(), None, NOW, utc).as_deref(),
+            Some(
+                "ccx: warning: angel2 is limited (5h 95%); it frees 02:00 (2h00m). \
+                 Run ccx with no @name to pick an account."
+            )
+        );
+        let c = known("angel2", 5.0, vec![window(Kind::Session, 95.0, None)]);
+        assert!(
+            named_warning(&c, &cfg(), None, NOW, utc)
+                .unwrap()
+                .contains("(5h 95%); the reset time is unknown.")
+        );
+        let ok = known("angel2", 5.0, vec![window(Kind::Session, 50.0, Some(2))]);
+        assert_eq!(named_warning(&ok, &cfg(), None, NOW, utc), None);
+        assert_eq!(
+            named_warning(&unknown("angel2", 5.0), &cfg(), None, NOW, utc),
+            None
         );
     }
 

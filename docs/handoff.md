@@ -37,7 +37,7 @@ After the copy, ccx runs `claude --resume <id>` in the target from the session d
 - `--resume <id>`: the account with `projects/*/<id>.jsonl`. The newest copy wins.
 - `-c`: the account with the newest `*.jsonl` in `projects/<encoded cwd>/`. With none, ccx uses automatic selection.
 
-[Automatic selection](launch.md#automatic-selection) defines "limited" and picks the target. Then:
+[Automatic selection](launch.md#automatic-selection) defines "limited" and picks the target. When the session stopped at a usage limit, the owner is limited until the reset, also when the usage cache is old ([Limit hits](launch.md#automatic-selection)). Then:
 
 1. **Owner not limited:** ccx launches the owner and copies nothing.
 2. **Owner limited:** ccx hands off to the target and resumes there. `-c` becomes `--resume <id>`. For a fork, ccx resumes the fork.
