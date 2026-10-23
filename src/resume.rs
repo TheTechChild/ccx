@@ -225,6 +225,7 @@ mod tests {
             }),
             settings_model: None,
             paid: false,
+            running: 0,
         }
     }
 

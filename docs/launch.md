@@ -15,13 +15,19 @@ The first words `manage`, `status`, `usage` and `handoff` are ccx commands. ccx 
 Without `@name` or `CCX_ACCOUNT`, ccx selects an enabled account from the usage cache, or `cachedUsageUtilization` in `.claude.json` when it is newer ([Automatic refresh](usage-data.md#automatic-refresh)).
 
 1. An account is "limited" at session usage 90% or more, weekly usage 95% or more, or matched scoped weekly usage 98% or more. A scoped window matches when the session model name (`--model`, else `model` in `settings.json`) contains its model name, in any case. A window with a past reset time counts as 0%.
-2. A not-limited account scores (100 − the higher of session % and weekly %) × weight. Default weights: Pro 1, Max 5x 5, Max 20x 20, else 5 (Team, Enterprise, unknown). The tier comes from `oauthAccount` in `.claude.json`. An account `weight` key overrides it.
+2. A not-limited account scores (100 − the higher of session % and weekly %) × weight ÷ (running sessions + 1). Default weights: Pro 1, Max 5x 5, Max 20x 20, else 5 (Team, Enterprise, unknown). The tier comes from `oauthAccount` in `.claude.json`. An account `weight` key overrides it. All sessions on an account use the same usage windows, so the running sessions share its capacity. A running session is a `sessions/<pid>.json` file with a live `pid` ([ADR 0013](adr/0013-session-limit-awareness.md)).
 3. Unknown usage scores as 50% used and never makes an account limited. Known usage wins a tie.
 4. ccx stays on the last account (from `~/.local/state/ccx/state.json`) when it is not limited and scores within 10 points of the best (0-100 scale).
 5. When all accounts are limited, ccx starts the account with the soonest reset, with a warning, for example `all accounts limited; angel2 frees 14:05 (37m)`.
 6. ccx selects an [API-key account](api-key-accounts.md) only when all subscription accounts are limited, and asks first.
 
-Before ccx starts `claude`, it writes the selected account to `state.json` at mode 0600 and shows one banner line on stderr, for example `ccx → angel2 · 5h 23% · wk 61% (resets Thu 09:00) · /usage 4m`.
+**Limit hits.** When the newest session in the cwd stopped at a usage limit (the last message is the limit error of Claude Code), that limit is newer data than the usage cache. ccx counts that window of the account as 100% until its reset time. When ccx then selects a different account, it shows a note: `ccx: the last session here stopped at the angel2 usage limit. To continue it on a different account, run ccx -c.` ccx ignores a hit that a handoff copied into a different account.
+
+Before ccx starts `claude`, it writes the selected account to `state.json` at mode 0600 and shows one banner line on stderr, for example `ccx → angel2 · 5h 23% · wk 61% (resets Thu 09:00) · 1 running · /usage 4m`. The banner shows the running sessions only when there are some.
+
+## Named accounts
+
+`ccx @name` always starts the named account. When that account is limited, ccx shows a warning on a terminal, for example `ccx: warning: angel2 is limited (5h 100%); it frees 17:29 (56m). Run ccx with no @name to pick an account.` The check uses the usage data and a limit hit at the end of the session that `claude` opens (`--resume <id>`), else the newest session of the account in the cwd. It reads only local files.
 
 ## Claude subcommands
 

@@ -386,3 +386,235 @@ fn a_refused_handoff_keeps_the_session_in_the_owner() {
     assert_eq!(tty_json(&output)["env"]["CCX_ACTIVE"], "main");
     assert!(!fx.angel2().join("projects").exists());
 }
+
+// ADR 0013: a usage-limit hit at the end of a transcript, running sessions
+// and the warning for a named account.
+
+const HIT_UUID: &str = "33333333-3333-4333-8333-333333333333";
+
+/// RFC 3339 text in UTC for `ms` since the Unix epoch.
+fn rfc3339(ms: u64) -> String {
+    let secs = (ms / 1000) as i64;
+    let z = secs.div_euclid(86_400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    let rest = secs.rem_euclid(86_400);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.000Z",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    )
+}
+
+/// The transcript line that Claude Code writes when a turn stops at a
+/// usage limit. Synthetic values only.
+fn hit_line(at_ms: u64, resets_at_ms: u64) -> String {
+    json!({
+        "type": "assistant",
+        "uuid": HIT_UUID,
+        "timestamp": rfc3339(at_ms),
+        "isSidechain": false,
+        "error": "rate_limit",
+        "isApiErrorMessage": true,
+        "message": {"role": "assistant", "content": [{"type": "text", "text": "limit"}]},
+        "quotaLimits": {"rateLimitType": "five_hour", "resetsAt": resets_at_ms / 1000},
+    })
+    .to_string()
+}
+
+impl Fixture {
+    /// Adds a usage-limit hit `ago_secs` seconds ago to the end of the
+    /// transcript `path`, with a reset `reset_in_secs` seconds from now.
+    /// Lines that are not messages follow it, as in a real transcript. The
+    /// change time of the file is the time of the hit.
+    fn hit(&self, path: &Path, ago_secs: u64, reset_in_secs: i64) {
+        let now = now_ms();
+        let at = now - ago_secs * 1000;
+        let resets = (now as i64 + reset_in_secs * 1000) as u64;
+        let mut text = fs::read_to_string(path).unwrap();
+        text.push_str(&hit_line(at, resets));
+        text.push('\n');
+        text.push_str("{\"type\":\"system\",\"subtype\":\"turn_duration\"}\n");
+        text.push_str("{\"type\":\"last-prompt\"}\n");
+        fs::write(path, text).unwrap();
+        // A handoff refuses a transcript that changed in the last seconds.
+        set_age(path, ago_secs);
+    }
+
+    /// Writes `count` running sessions into the account `dir`. The pid is
+    /// the pid of the test process, so it is alive.
+    fn running(&self, dir: &Path, count: u32) {
+        let sessions = dir.join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        for n in 0..count {
+            let value = json!({"pid": std::process::id(), "sessionId": format!("{n}")});
+            fs::write(
+                sessions.join(format!("{}.json", 1000 + n)),
+                value.to_string(),
+            )
+            .unwrap();
+        }
+        // A `.key` file is never read and never counts.
+        fs::write(sessions.join("1.0123.key"), "not json").unwrap();
+    }
+}
+
+#[test]
+fn continue_hands_off_when_the_session_stopped_at_a_limit() {
+    let fx = Fixture::new();
+    let source = fx.session(&fx.angel2(), ID, 60);
+    fx.hit(&source, 30, 3600);
+    // The cache is older than the hit and does not show the limit.
+    fx.usage("angel2", 10.0);
+    fx.usage("main", 50.0);
+    let (json, _) = launched(&mut fx.ccx(&["-c"]));
+    assert_eq!(json["env"]["CCX_ACTIVE"], "main");
+    assert_eq!(json["argv"], json!(["--resume", ID]));
+    // The session is now in main. The next `-c` resumes it there.
+    let (json, _) = launched(&mut fx.ccx(&["-c"]));
+    assert_eq!(json["env"]["CCX_ACTIVE"], "main");
+
+    let fx = Fixture::new();
+    let source = fx.session(&fx.angel2(), ID, 60);
+    fx.hit(&source, 30, 3600);
+    fx.usage("angel2", 10.0);
+    fx.usage("main", 50.0);
+    let output = on_tty(&fx.ccx(&[]), &["--resume", ID]);
+    assert!(
+        output.contains("ccx: handoff angel2 → main (angel2 limited: 5h 100%)"),
+        "{output}"
+    );
+}
+
+#[test]
+fn an_old_or_reset_hit_does_not_count() {
+    // The limit has reset.
+    let fx = Fixture::new();
+    let source = fx.session(&fx.angel2(), ID, 60);
+    fx.hit(&source, 30, -60);
+    fx.usage("angel2", 10.0);
+    fx.usage("main", 50.0);
+    let (json, _) = launched(&mut fx.ccx(&["-c"]));
+    assert_eq!(json["env"]["CCX_ACTIVE"], "angel2");
+
+    // The usage data is newer than the hit.
+    let fx = Fixture::new();
+    let source = fx.session(&fx.angel2(), ID, 60);
+    fx.hit(&source, 600, 3600);
+    fx.usage("angel2", 10.0);
+    fx.usage("main", 50.0);
+    let (json, _) = launched(&mut fx.ccx(&["-c"]));
+    assert_eq!(json["env"]["CCX_ACTIVE"], "angel2");
+
+    // A message after the hit: the session continued.
+    let fx = Fixture::new();
+    let source = fx.session(&fx.angel2(), ID, 60);
+    fx.hit(&source, 30, 3600);
+    let mut text = fs::read_to_string(&source).unwrap();
+    text.push_str("{\"type\":\"user\",\"message\":{\"content\":\"go on\"}}\n");
+    fs::write(&source, text).unwrap();
+    fx.usage("angel2", 10.0);
+    fx.usage("main", 50.0);
+    let (json, _) = launched(&mut fx.ccx(&["-c"]));
+    assert_eq!(json["env"]["CCX_ACTIVE"], "angel2");
+}
+
+#[test]
+fn a_hit_that_a_handoff_copied_does_not_count() {
+    let fx = Fixture::new();
+    let source = fx.session(&fx.angel2(), ID, 60);
+    fx.hit(&source, 30, 3600);
+    // A copy of the session in main has the same hit line.
+    let copy = fx.main().join(source.strip_prefix(fx.angel2()).unwrap());
+    write(&copy, &fs::read_to_string(&source).unwrap());
+    set_age(&copy, 120);
+    fx.usage("angel2", 10.0);
+    fx.usage("main", 50.0);
+    let (json, _) = launched(&mut fx.ccx(&["-c"]));
+    assert_eq!(json["env"]["CCX_ACTIVE"], "angel2");
+}
+
+#[test]
+fn ccx_avoids_the_account_of_a_hit_and_tells_how_to_continue() {
+    let fx = Fixture::new();
+    let source = fx.session(&fx.angel2(), ID, 60);
+    fx.hit(&source, 30, 3600);
+    fx.usage("angel2", 10.0);
+    fx.usage("main", 50.0);
+    let (json, out) = launched(&mut fx.ccx(&[]));
+    assert_eq!(json["env"]["CCX_ACTIVE"], "main");
+    assert_eq!(json["argv"], json!([]));
+    assert_eq!(stderr(&out), "");
+
+    let output = on_tty(&fx.ccx(&[]), &[]);
+    assert!(
+        output.contains(
+            "ccx: the last session here stopped at the angel2 usage limit. \
+             To continue it on a different account, run ccx -c."
+        ),
+        "{output}"
+    );
+}
+
+#[test]
+fn a_named_limited_account_gets_a_warning_on_a_tty() {
+    let fx = Fixture::new();
+    fx.usage("angel2", 95.0);
+    fx.usage("main", 10.0);
+    // The launch does not change: the name wins.
+    let (json, out) = launched(&mut fx.ccx(&["@angel2"]));
+    assert_eq!(json["env"]["CCX_ACTIVE"], "angel2");
+    assert_eq!(stderr(&out), "");
+    let output = on_tty(&fx.ccx(&[]), &["@angel2"]);
+    assert!(
+        output.contains("ccx: warning: angel2 is limited (5h 95%); it frees "),
+        "{output}"
+    );
+    assert!(
+        output.contains("Run ccx with no @name to pick an account."),
+        "{output}"
+    );
+    assert_eq!(tty_json(&output)["env"]["CCX_ACTIVE"], "angel2");
+    // No warning for an account that is not limited.
+    let output = on_tty(&fx.ccx(&[]), &["@main"]);
+    assert!(!output.contains("warning"), "{output}");
+
+    // A hit at the end of the newest session of the account counts too.
+    let fx = Fixture::new();
+    let source = fx.session(&fx.angel2(), ID, 60);
+    fx.hit(&source, 30, 3600);
+    fx.usage("angel2", 10.0);
+    let output = on_tty(&fx.ccx(&[]), &["@angel2"]);
+    assert!(
+        output.contains("ccx: warning: angel2 is limited (5h 100%)"),
+        "{output}"
+    );
+}
+
+#[test]
+fn running_sessions_share_the_capacity_of_an_account() {
+    let fx = Fixture::new();
+    fx.usage("angel2", 10.0);
+    fx.usage("main", 40.0);
+    let (json, _) = launched(&mut fx.ccx(&[]));
+    assert_eq!(json["env"]["CCX_ACTIVE"], "angel2");
+
+    // Two running sessions in angel2: 90 / 3 = 30 is less than 60.
+    fx.running(&fx.angel2(), 2);
+    let (json, _) = launched(&mut fx.ccx(&[]));
+    assert_eq!(json["env"]["CCX_ACTIVE"], "main");
+
+    // The banner shows the running sessions.
+    fx.running(&fx.main(), 1);
+    let output = on_tty(&fx.ccx(&[]), &["@main"]);
+    assert!(output.contains("ccx: account main"), "{output}");
+    let output = on_tty(&fx.ccx(&[]), &[]);
+    assert!(output.contains(" · 1 running · "), "{output}");
+}

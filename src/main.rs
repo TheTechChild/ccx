@@ -9,6 +9,7 @@ mod handoff;
 mod keystore;
 mod launch;
 mod lifecycle;
+mod limit_hit;
 mod list;
 mod paid;
 mod paths;
@@ -599,8 +600,14 @@ fn run_launch(
         self_exe.as_deref(),
     );
     let mut auto = None;
+    let mut named_note = None;
     let account = match launch::pick_account(&config, name, subcommand, &parent)? {
-        Pick::Named(account) => account,
+        Pick::Named(account) => {
+            if show {
+                named_note = named_warning(&config, account, &args, &parent);
+            }
+            account
+        }
         Pick::Base(account) => {
             if let Some(word) = subcommand
                 && show
@@ -645,6 +652,9 @@ fn run_launch(
             for line in &auto.notes {
                 eprintln!("{line}");
             }
+        }
+        if let Some(line) = &named_note {
+            eprintln!("{line}");
         }
         if config.launch.banner {
             match auto.as_ref().and_then(|a| a.banner.as_ref()) {
@@ -769,17 +779,33 @@ fn auto_select<'a>(
 ) -> config::Result<(&'a config::Account, Auto)> {
     let config = cx.config;
     let home = config::home(cx.env)?;
+    let enc = cwd_enc();
     let owner = resume::intent(args).and_then(|intent| {
         let enc = match intent.kind {
-            resume::Kind::Continue => handoff::physical_cwd()
-                .ok()
-                .map(|cwd| handoff::encode_cwd(&cwd)),
+            resume::Kind::Continue => enc.as_deref(),
             resume::Kind::Resume(_) => None,
         };
-        resume::owner(config, &intent.kind, enc.as_deref()).map(|thread| (intent, thread))
+        resume::owner(config, &intent.kind, enc).map(|thread| (intent, thread))
     });
-    let candidates = fresh_candidates(cx, home);
+    let mut candidates = fresh_candidates(cx, home);
     let now = usage::now_ms();
+    // The session to resume, or else the newest session in the cwd. When it
+    // stopped at a usage limit, its account is limited (ADR 0013).
+    let recent = match &owner {
+        Some((_, thread)) => Some(thread.clone()),
+        None => enc
+            .as_deref()
+            .and_then(|enc| handoff::list(config, Some(enc)).into_iter().next()),
+    };
+    let hit = recent.and_then(|thread| {
+        let hit = limit_hit::find(config, &thread, now)?;
+        Some((thread.account, hit))
+    });
+    if let Some((name, hit)) = &hit
+        && let Some(candidate) = candidates.iter_mut().find(|c| &c.name == name)
+    {
+        pick::apply_hit(candidate, hit);
+    }
     let state_path = pick::state_path(home);
     let last = pick::read_state(&state_path).last;
     let model = pick::model_arg(args);
@@ -836,7 +862,50 @@ fn auto_select<'a>(
             pick::local_clock,
         ));
     }
+    if let Some((name, _)) = hit.filter(|(name, _)| *name != chosen.name) {
+        auto.notes.push(limit_hit::continue_note(&name));
+    }
     Ok((account, auto))
+}
+
+/// The encoded physical cwd: the `projects/` directory name of the cwd.
+fn cwd_enc() -> Option<String> {
+    handoff::physical_cwd()
+        .ok()
+        .map(|cwd| handoff::encode_cwd(&cwd))
+}
+
+/// The warning for `ccx @name` on a limited account (ADR 0013). It reads
+/// only local files: the usage data and the end of the session that claude
+/// will open, or of the newest session of the account in the cwd.
+fn named_warning(
+    config: &config::Config,
+    account: &config::Account,
+    args: &[OsString],
+    env: &Env,
+) -> Option<String> {
+    if account.is_paid() {
+        return None;
+    }
+    let home = config::home(env).ok()?;
+    let now = usage::now_ms();
+    let mut candidate = pick::candidate(account, home);
+    let thread = match resume::intent(args).map(|intent| intent.kind) {
+        Some(resume::Kind::Resume(id)) => {
+            handoff::find_by_id(config, &id).filter(|t| t.account == account.name)
+        }
+        _ => cwd_enc().and_then(|enc| {
+            handoff::transcripts(account, Some(&enc))
+                .into_iter()
+                .max_by_key(|t| t.modified)
+        }),
+    };
+    if let Some(hit) = thread.and_then(|t| limit_hit::find(config, &t, now)) {
+        pick::apply_hit(&mut candidate, &hit);
+    }
+    let model = pick::model_arg(args);
+    let model = model.as_deref().or(candidate.settings_model.as_deref());
+    pick::named_warning(&candidate, &config.pick, model, now, pick::local_clock)
 }
 
 fn chosen_state(name: &str, now: u64) -> pick::State {
