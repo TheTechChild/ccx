@@ -6,7 +6,7 @@ For the contributor rules, refer to [CONTRIBUTING.md](CONTRIBUTING.md) and [AGEN
 
 ## Status
 
-The current version is 0.1.2. All planned issues are done. New work starts with a new GitHub issue.
+The current version is 0.2.0. All planned issues are done. New work starts with a new GitHub issue.
 
 ## Releases
 
@@ -15,6 +15,7 @@ The current version is 0.1.2. All planned issues are done. New work starts with 
 | v0.1.0 | The first release: #1-#11 and #13-#24, made with the release process of #12. |
 | v0.1.1 | Sync never shares `chrome`, `daemon.log`, `downloads` and `feedback`. The config error tells the user to run `ccx manage adopt` when `config.toml` does not exist. |
 | v0.1.2 | #55: doctor `INFO` for unknown items and orphan keychain items, and sync asks which unknown items to share. |
+| v0.2.0 | #69 (ADR 0014): ccx fills the accounts in a fixed order (the base account, then by name, then API-key accounts) instead of balancing the usage. The `weight` and `pick.stickiness` keys are retired, and `ccx manage edit --weight` is removed. ADR 0013: `ccx @name` warns about a limited account, and a usage-limit hit at the end of a transcript limits the account. Docs: contributor docs (#58), and the reference text of each command moves from the README to `docs/`. |
 
 ## Issues
 
@@ -47,8 +48,9 @@ The GitHub issue is the specification for each step. All issues in this table ar
 | 23 | #23 | Follow-up: direct usage API, policy review. Result: no-go (ADR 0012) | v0.1.0 |
 | 24 | #24 | Follow-up: monthly spend report for API-key accounts | v0.1.0 |
 | 25 | #55 | Doctor `INFO` for unknown items and orphan keychain items; sync asks which unknown items to share | v0.1.2 |
-| 26 | #58 | Contributor docs: `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, README and PLAN.md updates | after v0.1.2 |
-| 27 | - | Session limits: named-launch warning, running sessions in the score, limit hits from transcripts (ADR 0013) | after v0.1.2 |
+| 26 | #58 | Contributor docs: `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, README and PLAN.md updates | v0.2.0 |
+| 27 | - | Session limits: named-launch warning, running sessions in the score, limit hits from transcripts (ADR 0013) | v0.2.0 |
+| 28 | #69 | Fill the accounts in a fixed order instead of balancing the usage (ADR 0014) | v0.2.0 |
 
 ## Architecture decisions
 
