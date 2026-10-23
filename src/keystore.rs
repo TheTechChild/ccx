@@ -412,7 +412,6 @@ pub mod tests {
             name: name.into(),
             dir: PathBuf::from(format!("/home/test/.claude-{name}")),
             dir_text: format!("~/.claude-{name}"),
-            weight: None,
             aliases: Vec::new(),
             enabled: true,
             email: None,

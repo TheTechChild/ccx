@@ -587,7 +587,6 @@ mod tests {
             session_avoid: 90,
             weekly_avoid: 95,
             scoped_avoid: 98,
-            stickiness: 10,
         }
     }
 

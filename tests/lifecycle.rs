@@ -23,7 +23,7 @@ dir = \"~/.claude\"
 
 [accounts.work]
 dir = \"~/.claude-work\" # the work dir
-weight = 2 # small
+aliases = [\"w\"] # short
 
 [accounts.loggedout1]
 dir = \"~/.claude-loggedout1\"
@@ -168,7 +168,7 @@ fn edit_and_rm_without_a_name_and_without_a_terminal_name_the_flags() {
     for (args, usage) in [
         (
             &["manage", "edit"][..],
-            "`ccx manage edit NAME [--email EMAIL] [--weight N] [--enable | --disable]`",
+            "`ccx manage edit NAME [--email EMAIL] [--enable | --disable]`",
         ),
         (
             &["manage", "rm", "--purge", "-y"][..],
@@ -357,24 +357,23 @@ fn logout_without_a_terminal_and_without_yes_refuses() {
 #[test]
 fn edit_changes_only_the_given_fields_and_keeps_comments() {
     let fx = Fixture::new();
-    let stdout = ok(fx.ccx(&["manage", "edit", "work", "--weight", "5", "--disable"]));
-    assert!(stdout.contains("work: weight = 5"), "{stdout}");
+    let stdout = ok(fx.ccx(&["manage", "edit", "work", "--disable"]));
     assert!(stdout.contains("work: enabled = false"), "{stdout}");
     assert_eq!(
         fx.config(),
         CONFIG.replace(
-            "weight = 2 # small\n",
-            "weight = 5 # small\nenabled = false\n"
+            "aliases = [\"w\"] # short\n",
+            "aliases = [\"w\"] # short\nenabled = false\n"
         )
     );
     assert_eq!(fx.overlay(), OVERLAY);
 
-    ok(fx.ccx(&["manage", "edit", "work", "--enable", "--weight", "0.5"]));
+    ok(fx.ccx(&["manage", "edit", "work", "--enable"]));
     assert_eq!(
         fx.config(),
         CONFIG.replace(
-            "weight = 2 # small\n",
-            "weight = 0.5 # small\nenabled = true\n"
+            "aliases = [\"w\"] # short\n",
+            "aliases = [\"w\"] # short\nenabled = true\n"
         )
     );
     assert!(fx.calls().is_empty());
@@ -405,14 +404,11 @@ fn edit_email_writes_only_to_the_overlay() {
 fn edit_rejects_values_that_are_not_valid() {
     let fx = Fixture::new();
     for args in [
-        &["work", "--weight", "0"][..],
-        &["work", "--weight", "-1"],
-        &["work", "--weight", "nan"],
-        &["work", "--weight", "many"],
+        &["work", "--weight", "5"][..],
         &["work", "--email", "not-an-email"],
         &["work", "--enable", "--disable"],
         &["work"],
-        &["nobody", "--weight", "1"],
+        &["nobody", "--disable"],
     ] {
         let mut all = vec!["manage", "edit"];
         all.extend(args);
@@ -461,8 +457,8 @@ fn edit_config_keeps_the_old_file_when_the_edit_is_not_valid() {
     fs::write(
         &new,
         CONFIG.replace(
-            "weight = 2 # small",
-            &format!("weight = 2\nemail = \"{email}\""),
+            "aliases = [\"w\"] # short",
+            &format!("aliases = [\"w\"]\nemail = \"{email}\""),
         ),
     )
     .unwrap();

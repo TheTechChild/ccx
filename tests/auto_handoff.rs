@@ -236,7 +236,7 @@ fn continue_launches_the_account_with_the_newest_session_for_the_cwd() {
 
     // With no session for the cwd, `-c` uses automatic selection.
     let fx = Fixture::new();
-    fx.usage("main", 50.0);
+    fx.usage("main", 92.0);
     fx.usage("angel2", 0.0);
     let (json, _) = launched(&mut fx.ccx(&["-c"]));
     assert_eq!(json["env"]["CCX_ACTIVE"], "angel2");
@@ -599,22 +599,19 @@ fn a_named_limited_account_gets_a_warning_on_a_tty() {
 }
 
 #[test]
-fn running_sessions_share_the_capacity_of_an_account() {
+fn running_sessions_do_not_change_the_fill_order() {
     let fx = Fixture::new();
     fx.usage("angel2", 10.0);
     fx.usage("main", 40.0);
     let (json, _) = launched(&mut fx.ccx(&[]));
-    assert_eq!(json["env"]["CCX_ACTIVE"], "angel2");
+    assert_eq!(json["env"]["CCX_ACTIVE"], "main");
 
-    // Two running sessions in angel2: 90 / 3 = 30 is less than 60.
-    fx.running(&fx.angel2(), 2);
+    // ccx fills main also when other sessions use it (ADR 0014).
+    fx.running(&fx.main(), 2);
     let (json, _) = launched(&mut fx.ccx(&[]));
     assert_eq!(json["env"]["CCX_ACTIVE"], "main");
 
     // The banner shows the running sessions.
-    fx.running(&fx.main(), 1);
-    let output = on_tty(&fx.ccx(&[]), &["@main"]);
-    assert!(output.contains("ccx: account main"), "{output}");
     let output = on_tty(&fx.ccx(&[]), &[]);
-    assert!(output.contains(" · 1 running · "), "{output}");
+    assert!(output.contains(" · 2 running · "), "{output}");
 }

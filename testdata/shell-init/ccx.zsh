@@ -89,7 +89,6 @@ _arguments "${_arguments_options[@]}" : \
 (edit)
 _arguments "${_arguments_options[@]}" : \
 '--email=[The expected email of the login]:EMAIL:_default' \
-'--weight=[The weight for automatic selection. It must be more than 0]:WEIGHT:_default' \
 '(--disable)--enable[Use the account for automatic selection]' \
 '--disable[Do not use the account for automatic selection]' \
 '-h[Print help (see more with '\''--help'\'')]' \

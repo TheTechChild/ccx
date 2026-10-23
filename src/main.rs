@@ -128,7 +128,7 @@ enum Manage {
     /// at mode 0700, runs sync, then runs `claude auth login` in the new
     /// account. It compares the email of the login with `--email`. It
     /// writes the account to `config.toml` and the email only to
-    /// `config.local.toml`. Then it shows the kind, the tier and the weight.
+    /// `config.local.toml`. Then it shows the kind and the tier.
     ///
     /// With no NAME on a terminal, add starts a wizard. It asks for the
     /// name, the dir, the login and the email, one step at a time.
@@ -200,9 +200,6 @@ enum Manage {
         /// The expected email of the login.
         #[arg(long)]
         email: Option<String>,
-        /// The weight for automatic selection. It must be more than 0.
-        #[arg(long)]
-        weight: Option<f64>,
         /// Use the account for automatic selection.
         #[arg(long, conflicts_with = "disable")]
         enable: bool,
@@ -460,13 +457,11 @@ fn run_own(args: Vec<OsString>) -> config::Result<ExitCode> {
                 Manage::Edit {
                     name,
                     email,
-                    weight,
                     enable,
                     disable,
                 } => {
                     let edit = lifecycle::Edit {
                         email,
-                        weight,
                         enabled: (enable || disable).then_some(enable),
                     };
                     match name {
@@ -807,26 +802,11 @@ fn auto_select<'a>(
         pick::apply_hit(candidate, hit);
     }
     let state_path = pick::state_path(home);
-    let last = pick::read_state(&state_path).last;
     let model = pick::model_arg(args);
     if let Some((intent, thread)) = owner {
-        return auto_resume(
-            cx,
-            home,
-            &candidates,
-            &intent,
-            &thread,
-            args,
-            last.as_deref(),
-        );
+        return auto_resume(cx, home, &candidates, &intent, &thread, args);
     }
-    let Some(decision) = pick::pick(
-        &candidates,
-        last.as_deref(),
-        model.as_deref(),
-        &config.pick,
-        now,
-    ) else {
+    let Some(decision) = pick::pick(&candidates, model.as_deref(), &config.pick, now) else {
         return Ok((config.base(), Auto::default()));
     };
     if let Some(index) = pick::paid_offer(&candidates, Some(&decision)) {
@@ -836,7 +816,7 @@ fn auto_select<'a>(
             let account = config
                 .account(name)
                 .expect("each candidate is a configured account");
-            // No pick state: stickiness is only for subscription accounts.
+            // No pick state: it records only subscription accounts.
             let auto = Auto {
                 banner: Some(paid::banner(name)),
                 paid_consent: true,
@@ -927,7 +907,6 @@ fn auto_resume<'a>(
     intent: &resume::Intent,
     thread: &handoff::Thread,
     args: &mut Vec<OsString>,
-    last: Option<&str>,
 ) -> config::Result<(&'a config::Account, Auto)> {
     let config = cx.config;
     let owner = config
@@ -947,7 +926,6 @@ fn auto_resume<'a>(
     let route = resume::route(
         candidates,
         &owner_candidate,
-        last,
         model.as_deref(),
         &config.pick,
         now,

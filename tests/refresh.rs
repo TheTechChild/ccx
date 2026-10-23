@@ -190,7 +190,8 @@ fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
 #[test]
 fn a_fresh_cache_launch_does_not_wait_for_a_fetch() {
     let fx = Fixture::new(SLOW_CONFIG);
-    fx.cache("main", 50.0, 4 * MINUTE);
+    // `main` is limited, so the pick is the next account.
+    fx.cache("main", 92.0, 4 * MINUTE);
     fx.cache("slow", 10.0, 14 * MINUTE);
     fx.record_start();
     let (active, elapsed, _) = launch(&mut fx.ccx(&[]));
@@ -295,14 +296,15 @@ fn a_manual_refresh_waits_for_the_lock_and_then_runs() {
 #[test]
 fn a_slow_blocking_fetch_stops_after_5_seconds_and_uses_the_fallback() {
     let fx = Fixture::new(SLOW_CONFIG);
-    fx.cache("main", 50.0, 4 * MINUTE);
+    fx.cache("main", 95.0, 4 * MINUTE);
     // Only the fallback of `slow` is known, and it is one hour old.
-    fx.fallback(".claude-slow", 1.0, 60 * MINUTE);
+    fx.fallback(".claude-slow", 95.0, 60 * MINUTE);
     let (active, elapsed, _) = launch(&mut fx.ccx(&[]));
     assert!(elapsed >= Duration::from_millis(4800), "{elapsed:?}");
     assert!(elapsed < Duration::from_secs(9), "{elapsed:?}");
-    // With unknown usage, `main` wins the tie; the fallback selects `slow`.
-    assert_eq!(active, "slow");
+    // With unknown usage, `slow` is not limited and wins. The fallback
+    // makes all accounts limited, so `main` (first, same reset) wins.
+    assert_eq!(active, "main");
     assert_eq!(fx.usage_calls(), 1, "only `slow` was stale");
     assert!(!fx.cache_path("slow").exists());
 }
@@ -310,14 +312,15 @@ fn a_slow_blocking_fetch_stops_after_5_seconds_and_uses_the_fallback() {
 #[test]
 fn a_blocking_fetch_stops_after_5_seconds_when_the_lock_is_held() {
     let fx = Fixture::new(CONFIG);
-    fx.cache("main", 50.0, 4 * MINUTE);
-    fx.fallback(".claude-angel2", 1.0, 60 * MINUTE);
+    fx.cache("main", 95.0, 4 * MINUTE);
+    fx.fallback(".claude-angel2", 95.0, 60 * MINUTE);
     fx.record_start();
     let holder = fx.hold_lock(Duration::from_secs(7));
     let (active, elapsed, _) = launch(&mut fx.ccx(&[]));
     assert!(elapsed >= Duration::from_millis(4800), "{elapsed:?}");
     assert!(elapsed < Duration::from_millis(6900), "{elapsed:?}");
-    assert_eq!(active, "angel2", "the fallback selects angel2");
+    // Unknown usage would select angel2. The fallback limits it.
+    assert_eq!(active, "main", "the fallback limits angel2");
     holder.join().unwrap();
     assert_eq!(fx.usage_calls(), 0);
 }

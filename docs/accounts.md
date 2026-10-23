@@ -76,7 +76,7 @@ After you confirm the plan, add:
 4. Compares the email from `claude auth status --json` with `--email`. If they differ, add shows a warning and asks before it writes the config. With no terminal, add stops and does not change the config.
 5. Adds the name and the directory to `config.toml`, with no email.
 6. Writes the email only to `config.local.toml`, with mode 0600.
-7. Shows the directory, the email, and the kind, tier and weight for automatic selection, for example `work: kind max, tier Max 5x, weight 5`. An unknown tier shows the raw value.
+7. Shows the directory, the email, the kind and the tier, for example `work: kind max, tier Max 5x`. An unknown tier shows the raw value.
 8. Copies the user MCP servers and the allowlisted preferences of the base account, as [`ccx manage sync --prefs`](sync.md#copy-mcp-servers-and-preferences) does. On failure, add shows a warning. Run `ccx manage sync --prefs NAME` to try again.
 
 `--no-login` skips steps 3, 4 and 8. `--no-prefs` skips step 8. Add keeps the other entries and the comments, and writes through a temporary file that it renames. If the login fails, the config does not change. Run add again.
@@ -104,16 +104,15 @@ With no browser (an SSH session, or Linux with no `DISPLAY` and no `WAYLAND_DISP
 
 ```sh
 ccx manage edit
-ccx manage edit work --weight 5               # Weight for automatic selection.
 ccx manage edit work --disable                # Exclude from automatic selection.
 ccx manage edit work --enable
 ccx manage edit work --email user@example.com # Change the expected email.
 ccx manage edit-config                        # Open config.toml in $EDITOR.
 ```
 
-The wizard asks for the account, then shows and asks for the email, the weight and if automatic selection uses it. It shows a summary and asks before it writes.
+The wizard asks for the account, then shows and asks for the email and if automatic selection uses it. It shows a summary and asks before it writes.
 
-`ccx manage edit NAME` changes only the fields that you give. It keeps the other entries, the order and the comments. It validates the two files before it writes, and refuses a value that is not valid, for example a weight of 0 or less. `--email` writes the email only to `config.local.toml` (mode 0600).
+`ccx manage edit NAME` changes only the fields that you give. It keeps the other entries, the order and the comments. It validates the two files before it writes, and refuses a value that is not valid, for example an email with no `@`. `--email` writes the email only to `config.local.toml` (mode 0600).
 
 `ccx manage edit-config` opens a copy of `config.toml` in `$EDITOR` (else `$VISUAL`, else `vi`). Then ccx writes it to `config.toml` if it is valid. If not, `config.toml` does not change, and ccx tells you where the copy is.
 

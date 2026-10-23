@@ -8,11 +8,10 @@ use serde_json::Value;
 
 const CCX: &str = env!("CARGO_BIN_EXE_ccx");
 
-// The weight makes the automatic pick `main` when the usage is unknown.
+// The automatic pick is `main`: the base account is first.
 const CONFIG: &str = r#"
 [accounts.main]
 dir = "~/.claude"
-weight = 20
 
 [accounts.angel2]
 dir = "~/.claude-angel2"

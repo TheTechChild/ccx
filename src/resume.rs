@@ -124,7 +124,6 @@ pub enum Route {
 pub fn route(
     candidates: &[Candidate],
     owner: &Candidate,
-    last: Option<&str>,
     model_arg: Option<&str>,
     config: &config::Pick,
     now_ms: u64,
@@ -146,7 +145,7 @@ pub fn route(
             pick::limit_text(usage, config, model, now_ms)
         )
     };
-    match pick::pick(candidates, last, model_arg, config, now_ms) {
+    match pick::pick(candidates, model_arg, config, now_ms) {
         Some(decision)
             if !matches!(decision.reason, pick::Reason::AllLimited { .. })
                 && candidates[decision.index].name != owner.name =>
@@ -205,14 +204,12 @@ mod tests {
             session_avoid: 90,
             weekly_avoid: 95,
             scoped_avoid: 98,
-            stickiness: 10,
         }
     }
 
     fn cand(name: &str, session: Option<f64>) -> Candidate {
         Candidate {
             name: name.into(),
-            weight: 5.0,
             usage: session.map(|percent| Snapshot {
                 source: Source::Usage,
                 fetched_at_ms: NOW,
@@ -290,9 +287,8 @@ mod tests {
 
     #[test]
     fn route_rules() {
-        let route = |cands: &[Candidate], owner: usize| {
-            route(cands, &cands[owner], None, None, &cfg(), NOW)
-        };
+        let route =
+            |cands: &[Candidate], owner: usize| route(cands, &cands[owner], None, &cfg(), NOW);
         // The owner is not limited, also when a different account is better.
         assert_eq!(
             route(&[cand("a", Some(80.0)), cand("b", Some(0.0))], 0),
@@ -321,14 +317,14 @@ mod tests {
         // A limited owner that is not a candidate (a disabled account).
         let owner = cand("off", Some(95.0));
         assert_eq!(
-            super::route(&[cand("b", Some(0.0))], &owner, None, None, &cfg(), NOW),
+            super::route(&[cand("b", Some(0.0))], &owner, None, &cfg(), NOW),
             Route::Handoff {
                 index: 0,
                 reason: "off limited: 5h 95%".into()
             }
         );
         assert_eq!(
-            super::route(&[], &owner, None, None, &cfg(), NOW),
+            super::route(&[], &owner, None, &cfg(), NOW),
             Route::AllLimited { decision: None }
         );
     }
@@ -342,11 +338,18 @@ mod tests {
 
     #[test]
     fn a_paid_owner_goes_to_a_usable_subscription_account() {
-        let cands = [paid("paid"), cand("a", Some(80.0)), cand("b", Some(10.0))];
+        // The first subscription account that is not limited, in the fill
+        // order. The API-key account is last.
+        let cands = [
+            cand("a", Some(92.0)),
+            cand("b", Some(80.0)),
+            cand("c", Some(10.0)),
+            paid("paid"),
+        ];
         assert_eq!(
-            route(&cands, &cands[0], None, None, &cfg(), NOW),
+            route(&cands, &cands[3], None, &cfg(), NOW),
             Route::Handoff {
-                index: 2,
+                index: 1,
                 reason: "paid is a paid API-key account".into()
             }
         );
@@ -356,7 +359,7 @@ mod tests {
     fn a_paid_owner_with_all_subscription_accounts_limited() {
         let cands = [paid("paid"), cand("a", Some(95.0))];
         assert!(matches!(
-            route(&cands, &cands[0], None, None, &cfg(), NOW),
+            route(&cands, &cands[0], None, &cfg(), NOW),
             Route::AllLimited {
                 decision: Some(pick::Decision { index: 1, .. })
             }
@@ -364,7 +367,7 @@ mod tests {
         // Only paid accounts: no subscription account to go to.
         let cands = [paid("paid")];
         assert_eq!(
-            route(&cands, &cands[0], None, None, &cfg(), NOW),
+            route(&cands, &cands[0], None, &cfg(), NOW),
             Route::AllLimited { decision: None }
         );
     }

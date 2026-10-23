@@ -270,7 +270,6 @@ pub fn run(parent: &Env, choices: &Choices, ask: &mut Ask) -> Result<()> {
             is_base: dir == base_dir,
             dir,
             dir_text: found.dir_text.clone(),
-            weight: None,
             aliases: Vec::new(),
             enabled: true,
             email: None,

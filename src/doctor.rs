@@ -126,6 +126,7 @@ pub fn check_all(env: &Env) -> Vec<Finding> {
                 "config",
                 format!("{} accounts in {path}", config.accounts.len()),
             ));
+            out.extend(check_retired(&config));
             Some(config)
         }
         Err(e) => {
@@ -155,6 +156,21 @@ pub fn check_all(env: &Env) -> Vec<Finding> {
 }
 
 /// `claude` on PATH and its version.
+/// Keys that ccx still reads but no longer uses. They are INFO: the
+/// config works, but the key has no effect.
+fn check_retired(config: &Config) -> Vec<Finding> {
+    config
+        .retired
+        .iter()
+        .map(|key| {
+            info(
+                "config",
+                format!("{key} is no longer used; ccx fills accounts in order. You can remove it"),
+            )
+        })
+        .collect()
+}
+
 fn check_claude(config: Option<&Config>, env: &Env, home: &OsStr) -> Finding {
     let bin = config.and_then(|c| c.launch.claude_bin.as_deref());
     let self_exe = std::env::current_exe().ok();
@@ -624,7 +640,6 @@ mod tests {
             name: name.into(),
             dir: dir.to_path_buf(),
             dir_text: dir.display().to_string(),
-            weight: None,
             aliases: Vec::new(),
             enabled: true,
             email: None,

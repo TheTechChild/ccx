@@ -22,7 +22,6 @@ use crate::config::{self, Account, Config, Result, Source};
 use crate::env::Env;
 use crate::launch;
 use crate::paths::{canonical, tilde};
-use crate::pick;
 use crate::prefs;
 use crate::status::{self, Auth};
 use crate::sync::{self, Class};
@@ -59,22 +58,20 @@ pub struct Args {
     pub key_file: bool,
 }
 
-/// The kind, the tier and the weight of an account after the login.
+/// The kind and the tier of an account after the login.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Info {
     pub kind: String,
     /// The display name of the tier, or the raw value for an unknown tier.
     pub tier: Option<String>,
-    pub weight: f64,
 }
 
 impl Info {
     pub fn line(&self, name: &str) -> String {
         format!(
-            "{name}: kind {}, tier {}, weight {}",
+            "{name}: kind {}, tier {}",
             self.kind,
             self.tier.as_deref().unwrap_or("-"),
-            self.weight
         )
     }
 }
@@ -100,7 +97,6 @@ pub fn run(parent: &Env, args: &Args, ask: &mut Ask) -> Result<()> {
         name: args.name.clone(),
         dir: dir.clone(),
         dir_text: dir_text.clone(),
-        weight: None,
         aliases: Vec::new(),
         enabled: true,
         email: None,
@@ -480,28 +476,23 @@ pub fn email_warning(want: Option<&str>, got: Option<&str>) -> Option<String> {
     }
 }
 
-/// The kind from `claude auth status`, and the tier and the weight from the
-/// `.claude.json` of the account.
+/// The kind from `claude auth status`, and the tier from the `.claude.json`
+/// of the account.
 pub fn account_info(auth: Option<&Auth>, account: &Account, home: &OsStr) -> Info {
     let claude_json: Option<Value> = fs::read(crate::usage::claude_json_path(account, home))
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-    info(auth, claude_json.as_ref(), account.weight)
+    info(auth, claude_json.as_ref())
 }
 
-/// `account_info` with the data read. `weight` is the weight in the config.
-pub fn info(auth: Option<&Auth>, claude_json: Option<&Value>, weight: Option<f64>) -> Info {
-    let text_at = |pointer: &str| {
-        claude_json
-            .and_then(|v| v.pointer(pointer))
-            .and_then(Value::as_str)
-    };
-    let tier = text_at("/oauthAccount/organizationRateLimitTier");
+/// `account_info` with the data read.
+pub fn info(auth: Option<&Auth>, claude_json: Option<&Value>) -> Info {
+    let tier = claude_json
+        .and_then(|v| v.pointer("/oauthAccount/organizationRateLimitTier"))
+        .and_then(Value::as_str);
     Info {
         kind: auth.map_or_else(|| "-".into(), status::kind_label),
         tier: tier.map(status::tier_label),
-        weight: weight
-            .unwrap_or_else(|| pick::tier_weight(text_at("/oauthAccount/organizationType"), tier)),
     }
 }
 
@@ -661,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn info_shows_kind_tier_and_weight() {
+    fn info_shows_kind_and_tier() {
         let auth = Auth {
             logged_in: true,
             method: Some("claude.ai".into()),
@@ -670,27 +661,20 @@ mod tests {
         let max20 =
             json!({"oauthAccount": {"organizationRateLimitTier": "default_claude_max_20x"}});
         assert_eq!(
-            info(Some(&auth), Some(&max20), None),
+            info(Some(&auth), Some(&max20)),
             Info {
                 kind: "max".into(),
                 tier: Some("Max 20x".into()),
-                weight: 20.0
             }
         );
-        // An unknown tier shows the raw string and the default weight.
+        // An unknown tier shows the raw string.
         let odd = json!({"oauthAccount": {"organizationRateLimitTier": "new_tier_x"}});
-        let got = info(Some(&auth), Some(&odd), None);
+        let got = info(Some(&auth), Some(&odd));
         assert_eq!(got.tier.as_deref(), Some("new_tier_x"));
-        assert_eq!(got.weight, 5.0);
-        // The config weight wins.
-        assert_eq!(info(Some(&auth), Some(&max20), Some(2.5)).weight, 2.5);
         let pro = json!({"oauthAccount": {"organizationType": "claude_pro"}});
-        let got = info(None, Some(&pro), None);
-        assert_eq!(
-            (got.kind.as_str(), got.tier.as_deref(), got.weight),
-            ("-", None, 1.0)
-        );
-        assert_eq!(got.line("work"), "work: kind -, tier -, weight 1");
+        let got = info(None, Some(&pro));
+        assert_eq!((got.kind.as_str(), got.tier.as_deref()), ("-", None));
+        assert_eq!(got.line("work"), "work: kind -, tier -");
     }
 
     use crate::wizard::Stop;

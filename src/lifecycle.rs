@@ -268,15 +268,14 @@ fn run_claude(claude: &Path, env: &Env, args: &[&str]) -> Result<()> {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Edit {
     pub email: Option<String>,
-    pub weight: Option<f64>,
     pub enabled: Option<bool>,
 }
 
 /// `ccx manage edit NAME`: changes only the given fields. `--email` goes
 /// only into `config.local.toml`. The other fields go into `config.toml`.
 pub fn edit(parent: &Env, name: &str, edit: &Edit) -> Result<()> {
-    if edit.email.is_none() && edit.weight.is_none() && edit.enabled.is_none() {
-        return Err("nothing to change; give --email, --weight, --enable or --disable".into());
+    if edit.email.is_none() && edit.enabled.is_none() {
+        return Err("nothing to change; give --email, --enable or --disable".into());
     }
     let setup = Setup::load(parent)?;
     setup.account(name)?;
@@ -314,13 +313,6 @@ pub fn apply_edit(
     edit: &Edit,
 ) -> Result<Vec<String>> {
     let mut changes = Vec::new();
-    if let Some(weight) = edit.weight {
-        if !(weight.is_finite() && weight > 0.0) {
-            return Err(format!("--weight {weight}: must be a positive number"));
-        }
-        set_value(main, name, "weight", weight_value(weight))?;
-        changes.push(format!("weight = {weight}"));
-    }
     if let Some(enabled) = edit.enabled {
         set_value(main, name, "enabled", Value::from(enabled))?;
         changes.push(format!("enabled = {enabled}"));
@@ -345,15 +337,6 @@ pub fn valid_email(email: &str) -> bool {
                 && !email.chars().any(char::is_whitespace)
         }
         None => false,
-    }
-}
-
-/// A whole weight is written as an integer, for example `weight = 5`.
-fn weight_value(weight: f64) -> Value {
-    if weight.fract() == 0.0 && weight < 1e15 {
-        Value::from(weight as i64)
-    } else {
-        Value::from(weight)
     }
 }
 
@@ -460,8 +443,7 @@ fn mode_of(path: &Path) -> u32 {
 }
 
 /// The usage line that names the flags of `ccx manage edit`.
-pub const EDIT_USAGE: &str =
-    "ccx manage edit NAME [--email EMAIL] [--weight N] [--enable | --disable]";
+pub const EDIT_USAGE: &str = "ccx manage edit NAME [--email EMAIL] [--enable | --disable]";
 /// The usage line that names the flags of `ccx manage rm`.
 pub const RM_USAGE: &str = "ccx manage rm NAME [--purge] -y";
 
@@ -484,7 +466,7 @@ pub fn edit_wizard(parent: &Env, p: &mut dyn Prompt, given: &Edit) -> Step<()> {
     let account = accounts[index];
     let email = adopt::email_of(&overlay, &account.name);
     let edit = ask_edit(p, account, email, given)?;
-    if edit.email.is_none() && edit.weight.is_none() && edit.enabled.is_none() {
+    if edit.email.is_none() && edit.enabled.is_none() {
         p.show("No change.");
         return Ok(());
     }
@@ -509,17 +491,14 @@ pub fn ask_edit(
     given: &Edit,
 ) -> Step<Edit> {
     p.show(&format!(
-        "Account {}: dir {}, email {}, weight {}, enabled {}",
+        "Account {}: dir {}, email {}, enabled {}",
         account.name,
         account.dir_text,
         email.unwrap_or("-"),
-        account
-            .weight
-            .map_or_else(|| "from the tier".to_string(), |w| w.to_string()),
         account.enabled
     ));
     let new_email = p.text(
-        "Step 1 of 3: the expected email (an empty answer keeps the default)",
+        "Step 1 of 2: the expected email (an empty answer keeps the default)",
         given.email.as_deref().or(email),
         &|text| {
             if text.is_empty() || valid_email(text) {
@@ -529,26 +508,12 @@ pub fn ask_edit(
             }
         },
     )?;
-    let weight_text = given.weight.or(account.weight).map(|w| w.to_string());
-    let new_weight = p.text(
-        "Step 2 of 3: the weight (an empty answer keeps the default)",
-        weight_text.as_deref(),
-        &|text| match text {
-            "" => Ok(()),
-            text => match text.parse::<f64>() {
-                Ok(w) if w.is_finite() && w > 0.0 => Ok(()),
-                _ => Err(format!("`{text}` is not a positive number")),
-            },
-        },
-    )?;
     let enabled = p.confirm(
-        "Step 3 of 3: use the account for automatic selection?",
+        "Step 2 of 2: use the account for automatic selection?",
         given.enabled.unwrap_or(account.enabled),
     )?;
-    let weight = new_weight.parse::<f64>().ok();
     Ok(Edit {
         email: (!new_email.is_empty() && Some(new_email.as_str()) != email).then_some(new_email),
-        weight: weight.filter(|w| Some(*w) != account.weight),
         enabled: (enabled != account.enabled).then_some(enabled),
     })
 }
@@ -558,9 +523,6 @@ pub fn edit_summary(edit: &Edit) -> Vec<String> {
     let mut lines = Vec::new();
     if let Some(email) = &edit.email {
         lines.push(format!("set the email to {email} (in config.local.toml)"));
-    }
-    if let Some(weight) = edit.weight {
-        lines.push(format!("set the weight to {weight}"));
     }
     if let Some(enabled) = edit.enabled {
         lines.push(format!("set enabled to {enabled}"));
@@ -808,11 +770,10 @@ dir = \"~/.claude\"
 
 [accounts.work]
 dir = \"~/.claude-work\" # the work dir
-weight = 2 # small
-enabled = true
+enabled = true # on
 
 [pick]
-stickiness = 5
+session_avoid = 85
 ";
 
     fn docs() -> (DocumentMut, DocumentMut) {
@@ -823,32 +784,29 @@ stickiness = 5
     fn edit_changes_only_the_given_fields_and_keeps_comments() {
         let (mut main, mut overlay) = docs();
         let edit = Edit {
-            weight: Some(5.0),
             enabled: Some(false),
             ..Edit::default()
         };
         let changes = apply_edit(&mut main, &mut overlay, "work", &edit).unwrap();
-        assert_eq!(changes, ["weight = 5", "enabled = false"]);
+        assert_eq!(changes, ["enabled = false"]);
         assert_eq!(
             main.to_string(),
-            CONFIG
-                .replace("weight = 2 # small", "weight = 5 # small")
-                .replace("enabled = true", "enabled = false")
+            CONFIG.replace("enabled = true # on", "enabled = false # on")
         );
         assert_eq!(overlay.to_string(), "");
     }
 
     #[test]
-    fn edit_adds_a_missing_key_and_writes_a_fraction_as_a_float() {
+    fn edit_adds_a_missing_key() {
         let (mut main, mut overlay) = docs();
         let edit = Edit {
-            weight: Some(2.5),
+            enabled: Some(false),
             ..Edit::default()
         };
         apply_edit(&mut main, &mut overlay, "main", &edit).unwrap();
         assert!(
             main.to_string()
-                .contains("[accounts.main]\ndir = \"~/.claude\"\nweight = 2.5\n"),
+                .contains("[accounts.main]\ndir = \"~/.claude\"\nenabled = false\n"),
             "{main}"
         );
     }
@@ -870,15 +828,6 @@ stickiness = 5
 
     #[test]
     fn edit_rejects_values_that_are_not_valid() {
-        for weight in [0.0, -1.0, f64::NAN, f64::INFINITY] {
-            let (mut main, mut overlay) = docs();
-            let edit = Edit {
-                weight: Some(weight),
-                ..Edit::default()
-            };
-            let e = apply_edit(&mut main, &mut overlay, "work", &edit).unwrap_err();
-            assert!(e.contains("positive number"), "{e}");
-        }
         for email in [
             "",
             "work",
@@ -945,7 +894,6 @@ stickiness = 5
             name: "work".into(),
             dir: PathBuf::from("/home/test/.claude-work"),
             dir_text: "~/.claude-work".into(),
-            weight: None,
             aliases: Vec::new(),
             enabled: true,
             email: None,
@@ -1042,25 +990,18 @@ stickiness = 5
     fn edit_wizard_gives_the_same_edit_as_the_flags() {
         let config = parsed("/home/test");
         let work = config.account("work").unwrap();
-        let mut p = Script::new([
-            Reply::Text("nope"),
-            Reply::Text("w@example.com"),
-            Reply::Text("-1"),
-            Reply::Text("5"),
-            Reply::No,
-        ]);
+        let mut p = Script::new([Reply::Text("nope"), Reply::Text("w@example.com"), Reply::No]);
         let got = ask_edit(&mut p, work, None, &Edit::default()).unwrap();
         assert!(p.done());
         let log = p.text_log();
-        assert!(log.contains("Account work: dir ~/.claude-work, email -, weight 2, enabled true"));
+        assert!(log.contains("Account work: dir ~/.claude-work, email -, enabled true"));
         assert!(
-            log.contains("error: `-1` is not a positive number"),
+            log.contains("error: `nope` is not a valid email address"),
             "{log}"
         );
-        // `ccx manage edit work --email w@example.com --weight 5 --disable`
+        // `ccx manage edit work --email w@example.com --disable`
         let flags = Edit {
             email: Some("w@example.com".into()),
-            weight: Some(5.0),
             enabled: Some(false),
         };
         assert_eq!(got, flags);
@@ -1068,12 +1009,11 @@ stickiness = 5
             edit_summary(&got),
             [
                 "set the email to w@example.com (in config.local.toml)",
-                "set the weight to 5",
                 "set enabled to false"
             ]
         );
         // The defaults are the current values: no change.
-        let mut p = Script::new([Reply::Text(""), Reply::Text(""), Reply::Yes]);
+        let mut p = Script::new([Reply::Text(""), Reply::Yes]);
         let got = ask_edit(&mut p, work, Some("w@example.com"), &Edit::default()).unwrap();
         assert_eq!(got, Edit::default());
     }
@@ -1082,36 +1022,34 @@ stickiness = 5
     fn edit_wizard_takes_the_given_flags_as_defaults() {
         let config = parsed("/home/test");
         let work = config.account("work").unwrap();
-        // `ccx manage edit --email n@example.com --weight 5 --disable`, then
-        // Enter at each step.
+        // `ccx manage edit --email n@example.com --disable`, then Enter at
+        // each step.
         let given = Edit {
             email: Some("n@example.com".into()),
-            weight: Some(5.0),
             enabled: Some(false),
         };
-        let mut p = Script::new([Reply::Text(""), Reply::Text(""), Reply::Enter]);
+        let mut p = Script::new([Reply::Text(""), Reply::Enter]);
         let got = ask_edit(&mut p, work, Some("w@example.com"), &given).unwrap();
         assert!(p.done());
         assert_eq!(got, given);
         // A flag that gives the current value is no change.
         let given = Edit {
-            weight: Some(2.0),
+            enabled: Some(true),
             ..Edit::default()
         };
-        let mut p = Script::new([Reply::Text(""), Reply::Text(""), Reply::Enter]);
+        let mut p = Script::new([Reply::Text(""), Reply::Enter]);
         assert_eq!(ask_edit(&mut p, work, None, &given), Ok(Edit::default()));
         // The user can change a default that came from a flag.
         let given = Edit {
-            weight: Some(5.0),
+            email: Some("n@example.com".into()),
             enabled: Some(false),
-            ..Edit::default()
         };
-        let mut p = Script::new([Reply::Text(""), Reply::Text("3"), Reply::Yes]);
+        let mut p = Script::new([Reply::Text("m@example.com"), Reply::Yes]);
         let got = ask_edit(&mut p, work, None, &given).unwrap();
         assert_eq!(
             got,
             Edit {
-                weight: Some(3.0),
+                email: Some("m@example.com".into()),
                 ..Edit::default()
             }
         );
