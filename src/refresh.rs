@@ -299,7 +299,11 @@ mod tests {
         let soon = Instant::now() + Duration::from_millis(100);
         assert!(lock_until(home, soon).unwrap().is_none());
         drop(first);
-        assert!(try_lock(home).unwrap().is_some());
+        // A child process that a different test starts can hold a copy of
+        // the lock file for a short time, until it runs its program. Thus
+        // wait a little for the lock and do not use `try_lock`.
+        let later = Instant::now() + Duration::from_secs(5);
+        assert!(lock_until(home, later).unwrap().is_some());
     }
 
     #[test]
