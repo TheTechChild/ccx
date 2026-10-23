@@ -469,6 +469,15 @@ fn the_job_command_obeys_the_refresh_lock_and_the_gap() {
     job();
     assert_eq!(fx.usage_calls(), 0);
     drop(lock);
+    // A child process that a different test starts can hold a copy of the
+    // lock file for a short time, until it runs its program. Wait until the
+    // lock is free, so that the job does not see it as held.
+    let free = OpenOptions::new()
+        .write(true)
+        .open(state.join("refresh.lock"))
+        .unwrap();
+    free.lock().unwrap();
+    drop(free);
 
     // The lock is free: the job fetches each account.
     job();
