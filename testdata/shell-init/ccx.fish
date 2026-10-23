@@ -67,7 +67,6 @@ complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcomma
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from logout" -s y -l yes -d 'Log out without a prompt'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from logout" -s h -l help -d 'Print help'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from edit" -l email -d 'The expected email of the login' -r
-complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from edit" -l weight -d 'The weight for automatic selection. It must be more than 0' -r
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from edit" -l enable -d 'Use the account for automatic selection'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from edit" -l disable -d 'Do not use the account for automatic selection'
 complete -c ccx -n "__fish_ccx_using_subcommand manage; and __fish_seen_subcommand_from edit" -s h -l help -d 'Print help (see more with \'--help\')'

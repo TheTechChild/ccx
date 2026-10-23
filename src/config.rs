@@ -34,6 +34,9 @@ pub struct Config {
     pub pricing: BTreeMap<String, Price>,
     /// The `[sync]` lists of top-level base entries (#55).
     pub sync: SyncLists,
+    /// Keys that ccx still reads but no longer uses, for example
+    /// `accounts.work.weight` or `pick.stickiness`. Doctor shows them.
+    pub retired: Vec<String>,
 }
 
 /// The `[sync]` table: unknown top-level entries of the base dir that the
@@ -60,7 +63,6 @@ pub struct Account {
     pub dir: PathBuf,
     /// The `dir` text as the config writes it, before canonicalization.
     pub dir_text: String,
-    pub weight: Option<f64>,
     pub aliases: Vec<String>,
     pub enabled: bool,
     pub email: Option<String>,
@@ -95,13 +97,12 @@ pub enum KeySource {
     Command(String),
 }
 
-/// Thresholds in percent used, and stickiness in points.
+/// Thresholds in percent used.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pick {
     pub session_avoid: u32,
     pub weekly_avoid: u32,
     pub scoped_avoid: u32,
-    pub stickiness: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -203,7 +204,8 @@ struct RawBase {
 #[serde(deny_unknown_fields)]
 struct RawAccount {
     dir: Option<String>,
-    weight: Option<f64>,
+    /// Retired: ccx fills accounts in order and ignores the weight.
+    weight: Option<toml::Value>,
     aliases: Option<Vec<String>>,
     enabled: Option<bool>,
     email: Option<String>,
@@ -219,7 +221,8 @@ struct RawPick {
     session_avoid: Option<u32>,
     weekly_avoid: Option<u32>,
     scoped_avoid: Option<u32>,
-    stickiness: Option<u32>,
+    /// Retired: ccx fills accounts in order and ignores it.
+    stickiness: Option<toml::Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -370,6 +373,7 @@ fn build(raw: RawConfig, home: &OsStr) -> Result<Config> {
     let sync = sync_lists(raw.sync.unwrap_or_default())?;
     let mut accounts = Vec::new();
     let mut dirs = BTreeSet::new();
+    let mut retired = Vec::new();
     for (name, account) in raw.accounts {
         if !valid_name(&name) {
             return Err(format!(
@@ -394,10 +398,8 @@ fn build(raw: RawConfig, home: &OsStr) -> Result<Config> {
                 dir.display()
             ));
         }
-        if let Some(weight) = account.weight
-            && !(weight.is_finite() && weight > 0.0)
-        {
-            return Err(format!("accounts.{name}.weight: must be a positive number"));
+        if account.weight.is_some() {
+            retired.push(format!("accounts.{name}.weight"));
         }
         let api_key = key_source(&name, &account)?;
         if api_key.is_some() && dir == base_dir {
@@ -419,7 +421,6 @@ fn build(raw: RawConfig, home: &OsStr) -> Result<Config> {
             name,
             dir,
             dir_text,
-            weight: account.weight,
             aliases: account.aliases.unwrap_or_default(),
             enabled: account.enabled.unwrap_or(true),
             email: account.email,
@@ -435,11 +436,13 @@ fn build(raw: RawConfig, home: &OsStr) -> Result<Config> {
     }
 
     let pick = raw.pick.unwrap_or_default();
+    if pick.stickiness.is_some() {
+        retired.push("pick.stickiness".into());
+    }
     let pick = Pick {
         session_avoid: percent("pick.session_avoid", pick.session_avoid, 90)?,
         weekly_avoid: percent("pick.weekly_avoid", pick.weekly_avoid, 95)?,
         scoped_avoid: percent("pick.scoped_avoid", pick.scoped_avoid, 98)?,
-        stickiness: percent("pick.stickiness", pick.stickiness, 10)?,
     };
     let usage = raw.usage.unwrap_or_default();
     let usage = Usage {
@@ -493,6 +496,7 @@ fn build(raw: RawConfig, home: &OsStr) -> Result<Config> {
         },
         pricing,
         sync,
+        retired,
     })
 }
 
@@ -708,8 +712,8 @@ mod tests {
         assert_eq!(angel2.dir, PathBuf::from("/home/test/.claude-angel2"));
         assert!(!angel2.is_base);
         assert!(angel2.enabled);
-        assert_eq!(angel2.weight, None);
         assert!(angel2.aliases.is_empty());
+        assert!(config.retired.is_empty());
         assert!(config.launch.banner);
         assert_eq!(config.launch.claude_bin, None);
         assert_eq!(config.base_repo, None);
@@ -722,13 +726,8 @@ mod tests {
         let pick = config.pick;
         let usage = config.usage;
         assert_eq!(
-            [
-                pick.session_avoid,
-                pick.weekly_avoid,
-                pick.scoped_avoid,
-                pick.stickiness
-            ],
-            [90, 95, 98, 10]
+            [pick.session_avoid, pick.weekly_avoid, pick.scoped_avoid,],
+            [90, 95, 98]
         );
         assert_eq!(
             [
@@ -786,19 +785,16 @@ mod tests {
 
             [accounts.main]
             dir = "~/.claude"
-            weight = 20
 
             [accounts.angel2]
             dir = "~/.claude-angel2"
             aliases = ["claude2"]
             enabled = false
-            weight = 2.5
 
             [pick]
             session_avoid = 80
             weekly_avoid = 0
             scoped_avoid = 100
-            stickiness = 5
 
             [usage]
             fresh_minutes = 1
@@ -821,11 +817,9 @@ mod tests {
             config.base_repo.as_deref(),
             Some("https://github.com/example/claude-config.git")
         );
-        assert_eq!(config.account("main").unwrap().weight, Some(20.0));
         let angel2 = config.account("angel2").unwrap();
         assert_eq!(angel2.aliases, ["claude2"]);
         assert!(!angel2.enabled);
-        assert_eq!(angel2.weight, Some(2.5));
         assert_eq!(config.pick.session_avoid, 80);
         assert_eq!(config.pick.scoped_avoid, 100);
         assert_eq!(config.usage.refresh_min_gap_secs, 3);
@@ -1042,23 +1036,27 @@ mod tests {
     }
 
     #[test]
-    fn weight_must_be_positive() {
-        for weight in ["0", "-1", "0.0"] {
-            let err = parse_err(&format!(
-                "[accounts.main]\ndir = \"~/.claude\"\nweight = {weight}\n"
-            ));
-            assert!(err.contains("weight"), "{weight}: {err}");
-        }
+    fn retired_keys_load_and_are_listed() {
+        // Old configs still load. Any value is accepted, because ccx
+        // ignores it.
+        let config = parse_ok(
+            "[accounts.main]\ndir = \"~/.claude\"\nweight = 20\n\
+             [accounts.work]\ndir = \"~/.claude-work\"\nweight = -1\n\
+             [pick]\nstickiness = 500\n",
+        );
+        assert_eq!(
+            config.retired,
+            [
+                "accounts.main.weight",
+                "accounts.work.weight",
+                "pick.stickiness"
+            ]
+        );
     }
 
     #[test]
     fn pick_values_must_be_from_0_to_100() {
-        for key in [
-            "session_avoid",
-            "weekly_avoid",
-            "scoped_avoid",
-            "stickiness",
-        ] {
+        for key in ["session_avoid", "weekly_avoid", "scoped_avoid"] {
             let err = parse_err(&format!("{MINIMAL}\n[pick]\n{key} = 101\n"));
             assert!(
                 err.contains(&format!("pick.{key}: must be from 0 to 100")),

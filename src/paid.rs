@@ -142,7 +142,6 @@ mod tests {
             name: "paid".into(),
             dir: PathBuf::from("/home/test/.claude-paid"),
             dir_text: "~/.claude-paid".into(),
-            weight: None,
             aliases: Vec::new(),
             enabled: true,
             email: None,

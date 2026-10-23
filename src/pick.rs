@@ -1,7 +1,10 @@
 //! Automatic selection (#10): the picker, the pick state and the banner.
 //!
-//! The picker is a pure function. It gets the candidate accounts with their
-//! usage, the last account, the session model from the claude arguments,
+//! ccx fills the accounts in order: it uses the first account until it is
+//! limited, then the next one. The order is fixed: the base account, then
+//! the other subscription accounts by name, then the API-key accounts.
+//! The picker is a pure function. It gets the candidate accounts in that
+//! order with their usage, the session model from the claude arguments,
 //! the `[pick]` config and the time. It returns the account to launch.
 //! Every account can be used in every directory. There are no pins.
 
@@ -15,14 +18,10 @@ use serde_json::Value;
 use crate::config::{self, Account, Config, Result};
 use crate::usage::{self, Kind, Limit, Snapshot, Source};
 
-/// The percent used that ccx gives an account with unknown usage.
-pub const UNKNOWN_PERCENT: f64 = 50.0;
-
 /// One account that the picker can select.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Candidate {
     pub name: String,
-    pub weight: f64,
     /// `None` when there is no usage cache and no `cachedUsageUtilization`.
     pub usage: Option<Snapshot>,
     /// The `model` key in the `settings.json` of the account.
@@ -31,16 +30,14 @@ pub struct Candidate {
     /// is only a paid fallback when all subscription accounts are limited.
     pub paid: bool,
     /// The number of running Claude Code sessions in the account (ADR
-    /// 0013). They share the usage windows of the account.
+    /// 0013). The banner shows them. They do not change the pick (ADR 0014).
     pub running: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Reason {
-    /// The account with the best score.
-    Best,
-    /// The last account, because its score is near the best score.
-    Sticky,
+    /// The first account in the fill order that is not limited.
+    First,
     /// All accounts are limited. This account has the soonest reset.
     /// `frees_at_ms` is `None` when the reset time is not known.
     AllLimited { frees_at_ms: Option<i64> },
@@ -51,19 +48,6 @@ pub enum Reason {
 pub struct Decision {
     pub index: usize,
     pub reason: Reason,
-}
-
-/// The default weight of an account. `org_type` is
-/// `oauthAccount.organizationType` and `tier` is
-/// `oauthAccount.organizationRateLimitTier` from `.claude.json`.
-/// Pro 1, Max 5x 5, Max 20x 20. Team, Enterprise and unknown tiers use 5.
-pub fn tier_weight(org_type: Option<&str>, tier: Option<&str>) -> f64 {
-    match (org_type, tier) {
-        (Some("claude_pro"), _) => 1.0,
-        (Some("claude_team" | "claude_enterprise"), _) => 5.0,
-        (_, Some("default_claude_max_20x")) => 20.0,
-        _ => 5.0,
-    }
 }
 
 /// The `--model` value in the claude arguments (`--model X` or
@@ -178,87 +162,41 @@ fn frees_at(
         .try_fold(i64::MIN, |latest, at| Some(latest.max(at?)))
 }
 
-/// Remaining capacity × weight, divided by the number of sessions that
-/// will share it: the running sessions and the new session (ADR 0013).
-/// Unknown usage counts as 50% used.
-pub fn score(candidate: &Candidate, now_ms: u64) -> f64 {
-    let used = match &candidate.usage {
-        None => UNKNOWN_PERCENT,
-        Some(usage) => [Kind::Session, Kind::WeeklyAll]
-            .into_iter()
-            .filter_map(|kind| usage.get(kind))
-            .map(|l| current(l, now_ms))
-            .fold(0.0, f64::max),
-    };
-    (100.0 - used).max(0.0) * candidate.weight / (f64::from(candidate.running) + 1.0)
-}
-
-/// Picks an account. Returns `None` only when there are no candidates.
+/// Picks an account. Returns `None` only when there is no subscription
+/// candidate.
 ///
-/// The best account has the highest score. On a tie, an account with known
-/// usage ranks first, then the order of the candidates. The last account
-/// stays when it is not limited and its normalized score (score / best
-/// score × 100) is within `stickiness` points of 100. When all accounts are
+/// `candidates` are in the fill order (refer to [`candidates`]). The pick
+/// is the first subscription account that is not limited. Unknown usage
+/// never makes an account limited. When all subscription accounts are
 /// limited, the account with the soonest reset wins.
 pub fn pick<'a>(
     candidates: &'a [Candidate],
-    last: Option<&str>,
     model_arg: Option<&'a str>,
     config: &config::Pick,
     now_ms: u64,
 ) -> Option<Decision> {
     let model = |c: &'a Candidate| model_arg.or(c.settings_model.as_deref());
-    let mut open: Vec<(usize, f64)> = candidates
+    let first = candidates
         .iter()
-        .enumerate()
-        .filter(|(_, c)| !c.paid && !limited(c.usage.as_ref(), config, model(c), now_ms))
-        .map(|(i, c)| (i, score(c, now_ms)))
-        .collect();
-
-    if open.is_empty() {
-        let (index, frees_at_ms) = candidates
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| !c.paid)
-            .map(|(i, c)| {
-                let usage = c.usage.as_ref().expect("a limited account has usage");
-                (i, frees_at(usage, config, model(c), now_ms))
-            })
-            .min_by_key(|&(i, at)| (at.unwrap_or(i64::MAX), i))?;
+        .position(|c| !c.paid && !limited(c.usage.as_ref(), config, model(c), now_ms));
+    if let Some(index) = first {
         return Some(Decision {
             index,
-            reason: Reason::AllLimited { frees_at_ms },
+            reason: Reason::First,
         });
     }
-
-    let unknown = |i: usize| candidates[i].usage.is_none();
-    open.sort_by(|(a, sa), (b, sb)| {
-        sb.total_cmp(sa)
-            .then(unknown(*a).cmp(&unknown(*b)))
-            .then(a.cmp(b))
-    });
-    let (best, best_score) = open[0];
-    let sticky = last.and_then(|last| {
-        let &(index, score) = open.iter().find(|(i, _)| candidates[*i].name == last)?;
-        let normalized = if best_score > 0.0 {
-            score / best_score * 100.0
-        } else {
-            100.0
-        };
-        // A small margin, so that float rounding cannot change a result
-        // that is exactly at the limit.
-        (index != best && 100.0 - normalized <= f64::from(config.stickiness) + 1e-9)
-            .then_some(index)
-    });
-    Some(match sticky {
-        Some(index) => Decision {
-            index,
-            reason: Reason::Sticky,
-        },
-        None => Decision {
-            index: best,
-            reason: Reason::Best,
-        },
+    let (index, frees_at_ms) = candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| !c.paid)
+        .map(|(i, c)| {
+            let usage = c.usage.as_ref().expect("a limited account has usage");
+            (i, frees_at(usage, config, model(c), now_ms))
+        })
+        .min_by_key(|&(i, at)| (at.unwrap_or(i64::MAX), i))?;
+    Some(Decision {
+        index,
+        reason: Reason::AllLimited { frees_at_ms },
     })
 }
 
@@ -331,7 +269,6 @@ pub fn candidate(account: &Account, home: &OsStr) -> Candidate {
         // An API-key account has no usage windows and no tier.
         return Candidate {
             name: account.name.clone(),
-            weight: account.weight.unwrap_or(1.0),
             usage: None,
             settings_model: None,
             paid: true,
@@ -341,18 +278,6 @@ pub fn candidate(account: &Account, home: &OsStr) -> Candidate {
     let claude_json: Option<Value> = fs::read(usage::claude_json_path(account, home))
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-    let text_at = |pointer: &str| {
-        claude_json
-            .as_ref()
-            .and_then(|v| v.pointer(pointer))
-            .and_then(Value::as_str)
-    };
-    let weight = account.weight.unwrap_or_else(|| {
-        tier_weight(
-            text_at("/oauthAccount/organizationType"),
-            text_at("/oauthAccount/organizationRateLimitTier"),
-        )
-    });
     // The newer of the ccx cache and `cachedUsageUtilization`. The launch
     // uses the age of this data for the blocking fetch (#11).
     let cache = usage::read_cache(&usage::cache_path(home, &account.name));
@@ -371,7 +296,6 @@ pub fn candidate(account: &Account, home: &OsStr) -> Candidate {
         .and_then(|v| v.get("model")?.as_str().map(String::from));
     Candidate {
         name: account.name.clone(),
-        weight,
         usage,
         settings_model,
         paid: false,
@@ -379,12 +303,20 @@ pub fn candidate(account: &Account, home: &OsStr) -> Candidate {
     }
 }
 
-/// The enabled accounts as candidates, in name order.
+/// The enabled accounts in the fill order: the base account first, then
+/// the other subscription accounts by name, then the API-key accounts by
+/// name.
+pub fn fill_order(accounts: &[Account]) -> Vec<&Account> {
+    let mut out: Vec<&Account> = accounts.iter().filter(|a| a.enabled).collect();
+    // The sort is stable and `accounts` is in name order.
+    out.sort_by_key(|a| (!a.is_base, a.is_paid()));
+    out
+}
+
+/// The enabled accounts as candidates, in the fill order.
 pub fn candidates(config: &Config, home: &OsStr) -> Vec<Candidate> {
-    config
-        .accounts
-        .iter()
-        .filter(|a| a.enabled)
+    fill_order(&config.accounts)
+        .into_iter()
         .map(|a| candidate(a, home))
         .collect()
 }
@@ -402,6 +334,7 @@ pub fn state_path(home: &OsStr) -> PathBuf {
 }
 
 /// Reads the state. A missing or bad file gives the default state.
+#[cfg(test)]
 pub fn read_state(path: &Path) -> State {
     fs::read(path)
         .ok()
@@ -545,7 +478,6 @@ mod tests {
             session_avoid: 90,
             weekly_avoid: 95,
             scoped_avoid: 98,
-            stickiness: 10,
         }
     }
 
@@ -587,10 +519,9 @@ mod tests {
         }
     }
 
-    fn known(name: &str, weight: f64, limits: Vec<Limit>) -> Candidate {
+    fn known(name: &str, limits: Vec<Limit>) -> Candidate {
         Candidate {
             name: name.into(),
-            weight,
             usage: Some(Snapshot {
                 source: Source::Usage,
                 fetched_at_ms: NOW - 4 * 60_000,
@@ -602,10 +533,9 @@ mod tests {
         }
     }
 
-    fn used(name: &str, weight: f64, session: f64, weekly: f64) -> Candidate {
+    fn used(name: &str, session: f64, weekly: f64) -> Candidate {
         known(
             name,
-            weight,
             vec![
                 window(Kind::Session, session, Some(2)),
                 window(Kind::WeeklyAll, weekly, Some(72)),
@@ -613,23 +543,22 @@ mod tests {
         )
     }
 
-    fn unknown(name: &str, weight: f64) -> Candidate {
+    fn unknown(name: &str) -> Candidate {
         Candidate {
             usage: None,
-            ..known(name, weight, vec![])
+            ..known(name, vec![])
         }
     }
 
-    fn pick_name(cands: &[Candidate], last: Option<&str>, model: Option<&str>) -> String {
-        let decision = pick(cands, last, model, &cfg(), NOW).unwrap();
+    fn pick_name(cands: &[Candidate], model: Option<&str>) -> String {
+        let decision = pick(cands, model, &cfg(), NOW).unwrap();
         cands[decision.index].name.clone()
     }
 
     fn paid(name: &str) -> Candidate {
         Candidate {
             paid: true,
-            // A high weight: the picker must skip it anyway.
-            ..unknown(name, 100.0)
+            ..unknown(name)
         }
     }
 
@@ -638,17 +567,13 @@ mod tests {
     #[test]
     fn paid_accounts_are_never_picked_while_a_subscription_account_is_usable() {
         let sets = [
-            vec![paid("paid"), used("a", 1.0, 89.0, 94.0)],
-            vec![
-                used("a", 1.0, 95.0, 10.0),
-                paid("paid"),
-                used("b", 1.0, 80.0, 10.0),
-            ],
+            vec![paid("paid"), used("a", 89.0, 94.0)],
+            vec![used("a", 95.0, 10.0), paid("paid"), used("b", 80.0, 10.0)],
             // Unknown usage is never limited, so `a` is usable.
-            vec![paid("paid"), unknown("a", 1.0)],
+            vec![paid("paid"), unknown("a")],
         ];
         for cands in sets {
-            let decision = pick(&cands, Some("paid"), None, &cfg(), NOW).unwrap();
+            let decision = pick(&cands, None, &cfg(), NOW).unwrap();
             assert!(!cands[decision.index].paid, "{cands:?}");
             assert!(!matches!(decision.reason, Reason::AllLimited { .. }));
             assert_eq!(paid_offer(&cands, Some(&decision)), None, "{cands:?}");
@@ -658,12 +583,12 @@ mod tests {
     #[test]
     fn paid_accounts_are_offered_only_when_all_subscription_accounts_are_limited() {
         let cands = vec![
-            used("a", 1.0, 95.0, 10.0),
+            used("a", 95.0, 10.0),
             paid("paid"),
             paid("paid2"),
-            used("b", 1.0, 10.0, 96.0),
+            used("b", 10.0, 96.0),
         ];
-        let decision = pick(&cands, None, None, &cfg(), NOW).unwrap();
+        let decision = pick(&cands, None, &cfg(), NOW).unwrap();
         // The soonest-reset rule stays the fallback for a "no".
         assert_eq!(cands[decision.index].name, "a");
         assert!(matches!(decision.reason, Reason::AllLimited { .. }));
@@ -673,11 +598,11 @@ mod tests {
     #[test]
     fn only_paid_accounts_give_no_pick_and_no_offer() {
         let cands = vec![paid("paid")];
-        assert_eq!(pick(&cands, None, None, &cfg(), NOW), None);
+        assert_eq!(pick(&cands, None, &cfg(), NOW), None);
         assert_eq!(paid_offer(&cands, None), None);
         // No paid account: nothing to offer.
-        let cands = vec![used("a", 1.0, 95.0, 10.0)];
-        let decision = pick(&cands, None, None, &cfg(), NOW).unwrap();
+        let cands = vec![used("a", 95.0, 10.0)];
+        let decision = pick(&cands, None, &cfg(), NOW).unwrap();
         assert_eq!(paid_offer(&cands, Some(&decision)), None);
     }
 
@@ -690,144 +615,104 @@ mod tests {
     }
 
     #[test]
-    fn tier_weights() {
-        let cases = [
-            (Some("claude_pro"), Some("default_claude_ai"), 1.0),
-            (Some("claude_max"), Some("default_claude_max_5x"), 5.0),
-            (Some("claude_max"), Some("default_claude_max_20x"), 20.0),
-            (None, Some("default_claude_max_20x"), 20.0),
-            (Some("claude_team"), Some("default_claude_max_20x"), 5.0),
-            (Some("claude_enterprise"), None, 5.0),
-            (Some("claude_max"), Some("future_tier"), 5.0),
-            (None, None, 5.0),
-        ];
-        for (org, tier, want) in cases {
-            assert_eq!(tier_weight(org, tier), want, "{org:?} {tier:?}");
-        }
-    }
-
-    #[test]
     fn picker_table() {
         struct Case {
             name: &'static str,
             cands: Vec<Candidate>,
-            last: Option<&'static str>,
             want: &'static str,
         }
         let cases = [
             Case {
-                name: "the weight multiplies the remaining capacity",
-                // a: 80 × 1 = 80, b: 30 × 5 = 150, c: 10 × 20 = 200.
+                name: "the first account wins while it is not limited",
+                cands: vec![used("main", 89.0, 94.0), used("a", 0.0, 0.0)],
+                want: "main",
+            },
+            Case {
+                name: "a limited account passes to the next account",
                 cands: vec![
-                    used("a", 1.0, 20.0, 10.0),
-                    used("b", 5.0, 70.0, 10.0),
-                    used("c", 20.0, 10.0, 90.0),
+                    used("main", 90.0, 10.0),
+                    used("a", 10.0, 95.0),
+                    used("b", 80.0, 80.0),
                 ],
-                last: None,
-                want: "c",
-            },
-            Case {
-                name: "a config weight changes the result",
-                cands: vec![used("a", 50.0, 20.0, 10.0), used("c", 20.0, 10.0, 90.0)],
-                last: None,
-                want: "a",
-            },
-            Case {
-                name: "the highest of session and weekly counts",
-                // a: (100 - 60) × 5 = 200, b: (100 - 50) × 5 = 250.
-                cands: vec![used("a", 5.0, 10.0, 60.0), used("b", 5.0, 50.0, 0.0)],
-                last: None,
                 want: "b",
             },
             Case {
                 name: "a window that has reset counts as 0%",
                 cands: vec![
                     known(
-                        "a",
-                        5.0,
+                        "main",
                         vec![
                             window(Kind::Session, 99.0, Some(-1)),
                             window(Kind::WeeklyAll, 99.0, Some(-1)),
                         ],
                     ),
-                    used("b", 5.0, 10.0, 10.0),
+                    used("a", 10.0, 10.0),
                 ],
-                last: None,
-                want: "a",
+                want: "main",
             },
             Case {
                 name: "a null reset time keeps the percent",
                 cands: vec![
-                    known("a", 5.0, vec![window(Kind::Session, 40.0, None)]),
-                    used("b", 5.0, 30.0, 0.0),
+                    known("main", vec![window(Kind::Session, 95.0, None)]),
+                    used("a", 30.0, 0.0),
                 ],
-                last: None,
-                want: "b",
-            },
-            Case {
-                name: "unknown usage scores 50% used",
-                // a: 50 × 5 = 250, b: 60 × 5 = 300.
-                cands: vec![unknown("a", 5.0), used("b", 5.0, 40.0, 0.0)],
-                last: None,
-                want: "b",
-            },
-            Case {
-                name: "unknown usage wins with a higher score",
-                cands: vec![unknown("a", 20.0), used("b", 5.0, 0.0, 0.0)],
-                last: None,
                 want: "a",
-            },
-            Case {
-                name: "on a tie, known usage ranks first",
-                cands: vec![unknown("a", 5.0), used("b", 5.0, 50.0, 0.0)],
-                last: None,
-                want: "b",
-            },
-            Case {
-                name: "on a full tie, the first candidate wins",
-                cands: vec![used("a", 5.0, 10.0, 0.0), used("b", 5.0, 10.0, 0.0)],
-                last: None,
-                want: "a",
-            },
-            Case {
-                name: "a limited account is never picked",
-                cands: vec![used("a", 20.0, 90.0, 0.0), used("b", 1.0, 80.0, 80.0)],
-                last: None,
-                want: "b",
             },
             Case {
                 name: "unknown usage is never limited",
-                cands: vec![used("a", 20.0, 95.0, 0.0), unknown("b", 1.0)],
-                last: None,
-                want: "b",
+                cands: vec![unknown("main"), used("a", 0.0, 0.0)],
+                want: "main",
             },
             Case {
-                name: "a limited last account does not stay",
-                cands: vec![used("a", 5.0, 91.0, 0.0), used("b", 5.0, 50.0, 0.0)],
-                last: Some("a"),
-                want: "b",
-            },
-            Case {
-                name: "an unknown last account does not stay",
-                cands: vec![used("a", 5.0, 0.0, 0.0), used("b", 5.0, 0.0, 0.0)],
-                last: Some("gone"),
-                want: "a",
+                name: "less usage on a later account does not matter",
+                cands: vec![used("main", 85.0, 90.0), unknown("a")],
+                want: "main",
             },
         ];
         for case in cases {
-            assert_eq!(
-                pick_name(&case.cands, case.last, None),
-                case.want,
-                "{}",
-                case.name
-            );
+            assert_eq!(pick_name(&case.cands, None), case.want, "{}", case.name);
         }
+    }
+
+    fn account(name: &str, dir: &str, enabled: bool, paid: bool) -> Account {
+        Account {
+            name: name.into(),
+            dir: PathBuf::from(dir),
+            dir_text: dir.into(),
+            aliases: vec![],
+            enabled,
+            email: None,
+            own: vec![],
+            is_base: dir == "/home/test/.claude",
+            api_key: paid.then_some(config::KeySource::File),
+        }
+    }
+
+    #[test]
+    fn fill_order_is_base_then_by_name_then_paid() {
+        // In name order, as the config gives them.
+        let accounts = [
+            account("aaa", "/home/test/.claude-aaa", true, false),
+            account("api", "/home/test/.claude-api", true, true),
+            account("main", "/home/test/.claude", true, false),
+            account("off", "/home/test/.claude-off", false, false),
+            account("zed", "/home/test/.claude-zed", true, false),
+        ];
+        let names: Vec<_> = fill_order(&accounts)
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert_eq!(names, ["main", "aaa", "zed", "api"]);
+        // The base account is first whatever its name is.
+        let mut renamed = accounts.clone();
+        renamed[2].name = "zzz".into();
+        assert_eq!(fill_order(&renamed)[0].name, "zzz");
     }
 
     #[test]
     fn session_threshold() {
         for (session, is_limited) in [(89.0, false), (89.99, false), (90.0, true), (100.0, true)] {
-            let c = used("a", 5.0, session, 0.0);
+            let c = used("a", session, 0.0);
             assert_eq!(
                 limited(c.usage.as_ref(), &cfg(), None, NOW),
                 is_limited,
@@ -839,7 +724,7 @@ mod tests {
     #[test]
     fn weekly_threshold() {
         for (weekly, is_limited) in [(94.0, false), (95.0, true)] {
-            let c = used("a", 5.0, 0.0, weekly);
+            let c = used("a", 0.0, weekly);
             assert_eq!(
                 limited(c.usage.as_ref(), &cfg(), None, NOW),
                 is_limited,
@@ -851,7 +736,7 @@ mod tests {
     #[test]
     fn scoped_threshold() {
         for (percent, is_limited) in [(97.0, false), (98.0, true)] {
-            let c = known("a", 5.0, vec![scoped("Opus", percent)]);
+            let c = known("a", vec![scoped("Opus", percent)]);
             assert_eq!(
                 limited(c.usage.as_ref(), &cfg(), Some("opus"), NOW),
                 is_limited,
@@ -866,30 +751,21 @@ mod tests {
             session_avoid: 50,
             weekly_avoid: 60,
             scoped_avoid: 70,
-            stickiness: 10,
         };
         let check = |c: Candidate, model, want| {
             assert_eq!(limited(c.usage.as_ref(), &config, model, NOW), want);
         };
-        check(used("a", 5.0, 49.0, 0.0), None, false);
-        check(used("a", 5.0, 50.0, 0.0), None, true);
-        check(used("a", 5.0, 0.0, 59.0), None, false);
-        check(used("a", 5.0, 0.0, 60.0), None, true);
-        check(
-            known("a", 5.0, vec![scoped("Opus", 69.0)]),
-            Some("opus"),
-            false,
-        );
-        check(
-            known("a", 5.0, vec![scoped("Opus", 70.0)]),
-            Some("opus"),
-            true,
-        );
+        check(used("a", 49.0, 0.0), None, false);
+        check(used("a", 50.0, 0.0), None, true);
+        check(used("a", 0.0, 59.0), None, false);
+        check(used("a", 0.0, 60.0), None, true);
+        check(known("a", vec![scoped("Opus", 69.0)]), Some("opus"), false);
+        check(known("a", vec![scoped("Opus", 70.0)]), Some("opus"), true);
     }
 
     #[test]
     fn scoped_match_rules() {
-        let full = known("a", 20.0, vec![scoped("Opus", 99.0)]);
+        let full = known("a", vec![scoped("Opus", 99.0)]);
         let usage = full.usage.as_ref();
         let c = cfg();
         // Case-insensitive substring of the model name.
@@ -907,53 +783,22 @@ mod tests {
 
     #[test]
     fn scoped_match_uses_the_model_arg_then_settings_model() {
-        let mut a = known("a", 20.0, vec![scoped("Opus", 99.0)]);
-        let b = used("b", 1.0, 50.0, 0.0);
-        // No session model: `a` is not limited and has the best score.
-        assert_eq!(pick_name(&[a.clone(), b.clone()], None, None), "a");
-        assert_eq!(pick_name(&[a.clone(), b.clone()], None, Some("opus")), "b");
+        let mut a = known("a", vec![scoped("Opus", 99.0)]);
+        let b = used("b", 50.0, 0.0);
+        // No session model: `a` is not limited and is first.
+        assert_eq!(pick_name(&[a.clone(), b.clone()], None), "a");
+        assert_eq!(pick_name(&[a.clone(), b.clone()], Some("opus")), "b");
         a.settings_model = Some("Opus".into());
-        assert_eq!(pick_name(&[a.clone(), b.clone()], None, None), "b");
+        assert_eq!(pick_name(&[a.clone(), b.clone()], None), "b");
         // `--model` wins over the settings model.
-        assert_eq!(pick_name(&[a, b], None, Some("sonnet")), "a");
+        assert_eq!(pick_name(&[a, b], Some("sonnet")), "a");
     }
 
     #[test]
-    fn unknown_usage_scores_50_times_the_weight() {
-        assert_eq!(score(&unknown("a", 20.0), NOW), 1000.0);
-        assert_eq!(score(&unknown("a", 1.0), NOW), 50.0);
+    fn unknown_usage_is_picked_never_blocked() {
         assert!(!limited(None, &cfg(), Some("opus"), NOW));
-        // An account with only unknown accounts is picked, never blocked.
-        let decision = pick(&[unknown("a", 5.0)], None, None, &cfg(), NOW).unwrap();
-        assert_eq!(decision.reason, Reason::Best);
-    }
-
-    #[test]
-    fn stickiness() {
-        // best: 100 × 5 = 500. last: normalized 90 (10 points), then 89.
-        let best = used("best", 5.0, 0.0, 0.0);
-        let near = used("last", 5.0, 10.0, 0.0);
-        let far = used("last", 5.0, 11.0, 0.0);
-        let decide = |last: &Candidate, config: &config::Pick| {
-            let cands = [best.clone(), last.clone()];
-            let d = pick(&cands, Some("last"), None, config, NOW).unwrap();
-            (cands[d.index].name.clone(), d.reason)
-        };
-        assert_eq!(decide(&near, &cfg()), ("last".into(), Reason::Sticky));
-        assert_eq!(decide(&far, &cfg()), ("best".into(), Reason::Best));
-        let wide = config::Pick {
-            stickiness: 20,
-            ..cfg()
-        };
-        assert_eq!(decide(&far, &wide), ("last".into(), Reason::Sticky));
-        let off = config::Pick {
-            stickiness: 0,
-            ..cfg()
-        };
-        assert_eq!(decide(&near, &off), ("best".into(), Reason::Best));
-        // The last account is the best account: the reason is Best.
-        let d = pick(std::slice::from_ref(&best), Some("best"), None, &cfg(), NOW).unwrap();
-        assert_eq!(d.reason, Reason::Best);
+        let decision = pick(&[unknown("a")], None, &cfg(), NOW).unwrap();
+        assert_eq!(decision.reason, Reason::First);
     }
 
     #[test]
@@ -961,16 +806,15 @@ mod tests {
         let cands = [
             known(
                 "a",
-                20.0,
                 vec![
                     window(Kind::Session, 95.0, Some(1)),
                     window(Kind::WeeklyAll, 96.0, Some(30)),
                 ],
             ),
-            used("b", 1.0, 92.0, 10.0),
-            known("c", 5.0, vec![window(Kind::Session, 99.0, None)]),
+            used("b", 92.0, 10.0),
+            known("c", vec![window(Kind::Session, 99.0, None)]),
         ];
-        let d = pick(&cands, Some("a"), None, &cfg(), NOW).unwrap();
+        let d = pick(&cands, None, &cfg(), NOW).unwrap();
         // `a` frees when both of its limiting windows reset (30 hours).
         // `b` frees in 2 hours. `c` has no reset time.
         assert_eq!(cands[d.index].name, "b");
@@ -981,9 +825,9 @@ mod tests {
             }
         );
         // Only unknown reset times: the first candidate.
-        let d = pick(&cands[2..], None, None, &cfg(), NOW).unwrap();
+        let d = pick(&cands[2..], None, &cfg(), NOW).unwrap();
         assert_eq!(d.reason, Reason::AllLimited { frees_at_ms: None });
-        assert_eq!(pick(&[], None, None, &cfg(), NOW), None);
+        assert_eq!(pick(&[], None, &cfg(), NOW), None);
     }
 
     #[test]
@@ -1010,7 +854,6 @@ mod tests {
     fn banner_and_warning_text() {
         let c = known(
             "angel2",
-            5.0,
             vec![
                 window(Kind::Session, 23.4, Some(2)),
                 window(Kind::WeeklyAll, 61.0, Some(57)),
@@ -1029,7 +872,7 @@ mod tests {
             "ccx → angel2 · 5h 23% · wk 61% (resets 09:00) · cached 4m"
         );
         assert_eq!(
-            banner(&unknown("main", 20.0), NOW, utc),
+            banner(&unknown("main"), NOW, utc),
             "ccx → main · usage unknown"
         );
         let at = NOW as i64 + 14 * HOUR + 37 * 60_000;
@@ -1044,19 +887,17 @@ mod tests {
     }
 
     #[test]
-    fn running_sessions_share_the_score() {
-        let mut a = known("angel2", 5.0, vec![window(Kind::Session, 10.0, Some(2))]);
-        let b = known("main", 5.0, vec![window(Kind::Session, 40.0, Some(2))]);
-        assert_eq!(score(&a, NOW), 450.0);
+    fn running_sessions_do_not_change_the_fill_order() {
+        let mut a = known("main", vec![window(Kind::Session, 40.0, Some(2))]);
+        let b = known("angel2", vec![window(Kind::Session, 10.0, Some(2))]);
         a.running = 2;
-        assert_eq!(score(&a, NOW), 150.0);
         let candidates = [a.clone(), b];
-        let decision = pick(&candidates, Some("angel2"), None, &cfg(), NOW).unwrap();
+        let decision = pick(&candidates, None, &cfg(), NOW).unwrap();
         assert_eq!(candidates[decision.index].name, "main");
         // The banner shows the running sessions.
         assert_eq!(
             banner(&a, NOW, utc),
-            "ccx → angel2 · 5h 10% · 2 running · /usage 4m"
+            "ccx → main · 5h 40% · 2 running · /usage 4m"
         );
     }
 
@@ -1073,7 +914,6 @@ mod tests {
     fn a_newer_hit_fills_its_window() {
         let mut c = known(
             "angel2",
-            5.0,
             vec![
                 window(Kind::Session, 10.0, Some(2)),
                 window(Kind::WeeklyAll, 20.0, Some(48)),
@@ -1082,7 +922,6 @@ mod tests {
         // The usage data is 4 minutes old. A hit 1 minute ago is newer.
         apply_hit(&mut c, &hit(NOW as i64 - 60_000, 2));
         assert!(limited(c.usage.as_ref(), &cfg(), None, NOW));
-        assert_eq!(score(&c, NOW), 0.0);
         let usage = c.usage.as_ref().unwrap();
         assert_eq!(usage.limits.len(), 2);
         assert_eq!(usage.get(Kind::Session).unwrap().percent, 100.0);
@@ -1092,7 +931,7 @@ mod tests {
 
     #[test]
     fn an_older_hit_does_not_change_the_usage() {
-        let mut c = known("angel2", 5.0, vec![window(Kind::Session, 10.0, Some(2))]);
+        let mut c = known("angel2", vec![window(Kind::Session, 10.0, Some(2))]);
         let before = c.clone();
         apply_hit(&mut c, &hit(NOW as i64 - 10 * 60_000, 2));
         assert_eq!(c, before);
@@ -1100,7 +939,7 @@ mod tests {
 
     #[test]
     fn a_hit_gives_usage_to_an_account_with_no_usage() {
-        let mut c = unknown("angel2", 5.0);
+        let mut c = unknown("angel2");
         apply_hit(&mut c, &hit(NOW as i64 - 60_000, 2));
         let usage = c.usage.as_ref().unwrap();
         assert_eq!(usage.source, Source::Transcript);
@@ -1110,7 +949,7 @@ mod tests {
 
     #[test]
     fn named_warning_text() {
-        let c = known("angel2", 5.0, vec![window(Kind::Session, 95.0, Some(2))]);
+        let c = known("angel2", vec![window(Kind::Session, 95.0, Some(2))]);
         assert_eq!(
             named_warning(&c, &cfg(), None, NOW, utc).as_deref(),
             Some(
@@ -1118,16 +957,16 @@ mod tests {
                  Run ccx with no @name to pick an account."
             )
         );
-        let c = known("angel2", 5.0, vec![window(Kind::Session, 95.0, None)]);
+        let c = known("angel2", vec![window(Kind::Session, 95.0, None)]);
         assert!(
             named_warning(&c, &cfg(), None, NOW, utc)
                 .unwrap()
                 .contains("(5h 95%); the reset time is unknown.")
         );
-        let ok = known("angel2", 5.0, vec![window(Kind::Session, 50.0, Some(2))]);
+        let ok = known("angel2", vec![window(Kind::Session, 50.0, Some(2))]);
         assert_eq!(named_warning(&ok, &cfg(), None, NOW, utc), None);
         assert_eq!(
-            named_warning(&unknown("angel2", 5.0), &cfg(), None, NOW, utc),
+            named_warning(&unknown("angel2"), &cfg(), None, NOW, utc),
             None
         );
     }
@@ -1136,7 +975,6 @@ mod tests {
     fn limit_text_names_the_limiting_windows() {
         let c = known(
             "a",
-            5.0,
             vec![
                 window(Kind::Session, 92.4, Some(2)),
                 window(Kind::WeeklyAll, 96.0, Some(72)),
@@ -1149,7 +987,7 @@ mod tests {
             "5h 92%, wk 96%, Opus wk 99%"
         );
         assert_eq!(limit_text(usage, &cfg(), None, NOW), "5h 92%, wk 96%");
-        let ok = used("b", 5.0, 10.0, 10.0);
+        let ok = used("b", 10.0, 10.0);
         assert_eq!(
             limit_text(ok.usage.as_ref().unwrap(), &cfg(), None, NOW),
             ""

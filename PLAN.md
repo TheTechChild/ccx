@@ -1,6 +1,6 @@
 # ccx history and status
 
-ccx is a Rust command-line tool. It starts Claude Code on the least-used of several accounts. This file gives the project history, the status, the design decisions and the M0 results.
+ccx is a Rust command-line tool. It starts Claude Code on the first of several accounts that is not limited. This file gives the project history, the status, the design decisions and the M0 results.
 
 For the contributor rules, refer to [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md).
 
@@ -65,6 +65,7 @@ The GitHub issue is the specification for each step. All issues in this table ar
 - [ADR 0011](docs/adr/0011-wizards-with-dialoguer.md): the `ccx manage` wizards use multi-step `dialoguer` prompts (decision D6). ccx adds no TUI crate.
 - [ADR 0012](docs/adr/0012-no-direct-usage-api.md): ccx does not call `/api/oauth/usage` directly (decision D6). That call needs the OAuth token, and ccx never reads credentials (ADR 0002).
 - [ADR 0013](docs/adr/0013-session-limit-awareness.md): `ccx @name` warns about a limited account, running sessions share the score of an account, and a usage-limit hit at the end of a transcript limits the account until the reset.
+- [ADR 0014](docs/adr/0014-fill-accounts-in-order.md): ccx fills the accounts in a fixed order (the base account, then by name, then API-key accounts). It does not balance the usage. The `weight` and `pick.stickiness` keys are retired.
 
 ## Design decisions
 
@@ -74,8 +75,8 @@ These decisions come from the design review before the first build.
 - **Base account:** the bare `claude` command stays on the base account. ccx makes aliases such as `claude2='ccx @angel2'`.
 - **Accounts:** ccx supports many accounts of all kinds. ccx gets the kind and the tier from `claude auth status` and from `.claude.json`. If the tier is unknown, ccx shows the raw value.
 - **Directories:** each account can be used in each directory. There are no pins.
-- **Selection:** ccx selects by remaining capacity multiplied by a weight (Pro 1, Max 5x 5, Max 20x 20, Team and Enterprise 5; the configuration can change the weights). ccx stays on the last account if the difference is 10 points or less.
-- **Limits:** an account is "limited" at session 90% or more, weekly 95% or more, or scoped weekly 98% or more. A scoped weekly limit applies only when the session model matches the scope name. Unknown usage counts as 50% used.
+- **Selection:** ccx fills the accounts in order: the base account, then the other subscription accounts in name order, then the API-key accounts. It uses the first account that is not limited (ADR 0014). The first build selected by remaining capacity multiplied by a weight, and stayed on the last account. ADR 0014 removed these rules.
+- **Limits:** an account is "limited" at session 90% or more, weekly 95% or more, or scoped weekly 98% or more. A scoped weekly limit applies only when the session model matches the scope name. Unknown usage never makes an account limited.
 - **All accounts limited:** ccx starts the account with the soonest reset and shows a warning.
 - **Usage refresh:** ccx uses a cache that is less than 15 minutes old and starts a detached background refresh before it starts `claude`. If the cache is older than 15 minutes, ccx fetches usage and waits for a maximum of 5 seconds. An optional service refreshes the accounts that are due by the adaptive interval (#22). `ccx @name` fetches nothing.
 - **Handoff:** ccx copies a session to a different account. It never moves the session. `ccx -c` and `ccx --resume <id>` do a handoff automatically when the owner account is limited.

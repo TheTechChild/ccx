@@ -259,17 +259,13 @@ _ccx() {
             return 0
             ;;
         ccx__subcmd__manage__subcmd__edit)
-            opts="-h --email --weight --enable --disable --help"
+            opts="-h --email --enable --disable --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
                 --email)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --weight)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;

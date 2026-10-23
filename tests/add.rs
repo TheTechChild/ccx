@@ -152,10 +152,7 @@ fn add_makes_the_dir_syncs_logs_in_and_writes_the_config() {
     cmd.env("ANTHROPIC_API_KEY", "synthetic-key");
     let stdout = ok(cmd);
     assert!(stdout.contains("ccx manage add will:"), "{stdout}");
-    assert!(
-        stdout.contains("work: kind max, tier Max 5x, weight 5"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("work: kind max, tier Max 5x"), "{stdout}");
 
     // The dir has mode 0700 and the sync links.
     let dir = fx.home().join(".claude-work");
@@ -227,7 +224,7 @@ fn an_unknown_tier_shows_the_raw_string() {
         .env("FAKE_LOGIN_ORG_TYPE", "claude_team");
     let stdout = ok(cmd);
     assert!(
-        stdout.contains("work: kind max, tier synthetic_new_tier, weight 5"),
+        stdout.contains("work: kind max, tier synthetic_new_tier"),
         "{stdout}"
     );
 
@@ -235,7 +232,7 @@ fn an_unknown_tier_shows_the_raw_string() {
     let mut cmd = fx.ccx(&["manage", "add", "big", "-y"]);
     cmd.env("FAKE_LOGIN_TIER", "default_claude_max_20x");
     let stdout = ok(cmd);
-    assert!(stdout.contains("tier Max 20x, weight 20"), "{stdout}");
+    assert!(stdout.contains("tier Max 20x"), "{stdout}");
 }
 
 #[test]

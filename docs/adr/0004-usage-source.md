@@ -5,7 +5,7 @@
 
 ## Context
 
-ccx selects the account that has the most usage available. Thus, ccx needs the current usage for each account. ccx must not use credentials (refer to [ADR 0002](0002-no-credential-access.md)).
+ccx selects an account from its usage. (The first build selected the account with the most usage available. [ADR 0014](0014-fill-accounts-in-order.md) changed this to a fill order.) Thus, ccx needs the current usage for each account. ccx must not use credentials (refer to [ADR 0002](0002-no-credential-access.md)).
 
 Claude Code shows the usage limits with the `/usage` command. In print mode with `stream-json` output, the assistant event contains `usage_report.rate_limits.limits[]`. Each limit has a kind: `session`, `weekly_all` or `weekly_scoped`.
 

@@ -16,7 +16,6 @@ dir = "~/.claude"          # The base account. Exactly one account must use this
 dir = "~/.claude-angel2"
 aliases = ["claude2"]      # Optional. `ccx manage shell-init` makes `alias claude2='ccx @angel2'`.
 own = ["statusline.py"]    # Optional. Items that `ccx manage sync` does not link.
-weight = 5                 # Optional. Overrides the tier weight for automatic selection.
 enabled = true             # Optional. false: automatic selection does not use the account.
 
 [accounts.paid]            # Optional. An API-key account: a paid fallback.
@@ -29,7 +28,6 @@ key_store = "keyring"      # "keyring" (the OS secret store item `ccx-paid`) or 
 session_avoid = 90         # session usage.
 weekly_avoid = 95          # weekly usage.
 scoped_avoid = 98          # matched scoped weekly usage.
-stickiness = 10            # Points within the best score that keep the last account.
 
 [usage]                    # Optional. The limits of the automatic refresh.
 fresh_minutes = 15         # Usage data that is less old than this is fresh.
@@ -64,5 +62,7 @@ Put email addresses only in the overlay `config.local.toml`. ccx reads it from `
 [accounts.angel2]
 email = "work@example.com"
 ```
+
+ccx does not use the account key `weight` or the `[pick]` key `stickiness` now ([ADR 0014](adr/0014-fill-accounts-in-order.md)). An old config with these keys still loads. `ccx manage doctor` shows an INFO line for each of them. You can remove them.
 
 [Issue #3](https://github.com/TheTechChild/ccx/issues/3) has the full schema.

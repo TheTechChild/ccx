@@ -1,6 +1,6 @@
 # 0013. Running sessions and limit hits change the pick
 
-- **Status:** Accepted
+- **Status:** Accepted. [ADR 0014](0014-fill-accounts-in-order.md) replaces decision 2.
 - **Date:** 2026-10-23
 
 ## Context

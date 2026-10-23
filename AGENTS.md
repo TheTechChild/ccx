@@ -4,7 +4,7 @@ These are the instructions for coding agents that work on ccx. `CLAUDE.md` impor
 
 ## What ccx is
 
-ccx is a Rust command-line tool. It starts Claude Code (`claude`) on the account that has the most usage available, or on the account that you name with `@name`. Each account is one Claude Code configuration directory. ccx also manages the accounts: adopt, add, sync, login, handoff of sessions, and a background usage refresh.
+ccx is a Rust command-line tool. It starts Claude Code (`claude`) on the first account that is not limited (the base account, then the other accounts in name order), or on the account that you name with `@name`. Each account is one Claude Code configuration directory. ccx also manages the accounts: adopt, add, sync, login, handoff of sessions, and a background usage refresh.
 
 [README.md](README.md) tells new users how to install and start ccx. The files in [`docs/`](docs/) tell how each command works. [PLAN.md](PLAN.md) has the project history and the design decisions.
 

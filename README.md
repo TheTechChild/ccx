@@ -1,6 +1,6 @@
 # ccx
 
-ccx is a command-line tool for more than one Claude Code account, such as a personal Max account and a work account. Each account has its own configuration directory. ccx reads the usage of each account and selects the account with the most usage available, or the account that you name. It sets `CLAUDE_CONFIG_DIR` for that account (not for the base account `~/.claude`) and starts `claude`.
+ccx is a command-line tool for more than one Claude Code account, such as a personal Max account and a work account. Each account has its own configuration directory. ccx reads the usage of each account. It uses the base account until it is limited, then the next account, or the account that you name. It sets `CLAUDE_CONFIG_DIR` for that account (not for the base account `~/.claude`) and starts `claude`.
 
 > **Status:** Version 0.1.2. All the commands and features in the [Documentation](#documentation) table are available. Refer to [PLAN.md](PLAN.md) for the project history.
 
@@ -32,7 +32,7 @@ mise does not show a release that is less than 24 hours old (the mise setting `m
 1. Add the accounts on this machine that you logged in to with `claude auth login`: `ccx manage adopt`. The base account uses `~/.claude`. Each other account uses its own directory, for example `~/.claude-angel2`.
 2. Add each new account: `ccx manage add NAME`. Add makes `~/.claude-NAME`, links the shared setup of the base account, runs `claude auth login` and writes the config. With no NAME, it starts the wizard. Refer to [Add a new account](docs/accounts.md#add-a-new-account). For an Anthropic API key, refer to [Add an API-key account](docs/api-key-accounts.md#add-an-api-key-account).
 3. Add completions and aliases to your shell profile: `eval "$(ccx manage shell-init zsh)"`. For example, `aliases = ["claude2"]` in account `angel2` gives `alias claude2='ccx @angel2'`. Refer to [Configuration](docs/configuration.md).
-4. Start Claude Code: `ccx` selects the account with the most capacity available. `ccx @angel2` starts account `angel2`.
+4. Start Claude Code: `ccx` selects the first account that is not limited: the base account, then the other accounts in name order. `ccx @angel2` starts account `angel2`.
 5. Show the usage of each account: `ccx status`.
 
 The bare `claude` command stays on the base account. ccx never makes an alias for `claude`.

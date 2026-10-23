@@ -170,8 +170,8 @@ fn launches_the_expected_account_with_its_config_dir() {
     assert_eq!(stderr(&out), "");
     assert_eq!(fx.calls(), 1);
 
-    // The base account wins when it has more capacity.
-    fx.cache("main", usage(5.0, 10.0));
+    // The base account wins again when it is not limited.
+    fx.cache("main", usage(89.0, 94.0));
     let (json, _) = launched(&mut fx.ccx(&[]));
     assert!(json["env"].get("CLAUDE_CONFIG_DIR").is_none());
     assert_eq!(json["env"]["CCX_ACTIVE"], "main");
@@ -207,29 +207,47 @@ fn named_launches_and_subcommands_do_not_use_the_picker() {
 }
 
 #[test]
-fn weights_come_from_the_tier_and_the_config() {
-    let fx = Fixture::new(CONFIG);
-    let tier = |org: &str, tier: &str| json!({"oauthAccount": {"organizationType": org, "organizationRateLimitTier": tier}});
-    fx.claude_json("~", tier("claude_max", "default_claude_max_5x"));
-    fx.claude_json(
-        ".claude-angel2",
-        tier("claude_max", "default_claude_max_20x"),
-    );
-    // Unknown usage: 50 × 5 against 50 × 20.
-    assert_eq!(active(&fx, &[]), "angel2");
-    // Session 60% on angel2: 40 × 20 = 800 is still more than 250.
-    fx.cache("angel2", usage(60.0, 0.0));
-    assert_eq!(active(&fx, &[]), "angel2");
-
-    let fx = Fixture::new(&CONFIG.replace(
-        "dir = \"~/.claude\"\n",
-        "dir = \"~/.claude\"\nweight = 100\n",
-    ));
-    fx.claude_json(
-        ".claude-angel2",
-        tier("claude_max", "default_claude_max_20x"),
-    );
+fn accounts_fill_in_order_base_first_then_by_name() {
+    let config = format!("{CONFIG}\n[accounts.zeta]\ndir = \"~/.claude-zeta\"\n");
+    let fx = Fixture::new(&config);
+    // Unknown usage on all accounts: the base account.
     assert_eq!(active(&fx, &[]), "main");
+    // More free capacity on a later account does not matter.
+    fx.cache("main", usage(85.0, 90.0));
+    fx.cache("angel2", usage(0.0, 0.0));
+    fx.cache("zeta", usage(0.0, 0.0));
+    assert_eq!(active(&fx, &[]), "main");
+    // A limited account passes to the next account by name.
+    fx.cache("main", usage(90.0, 10.0));
+    assert_eq!(active(&fx, &[]), "angel2");
+    fx.cache("angel2", usage(10.0, 95.0));
+    assert_eq!(active(&fx, &[]), "zeta");
+    // When the base account frees, ccx goes back to it.
+    fx.cache("main", usage(10.0, 10.0));
+    assert_eq!(active(&fx, &[]), "main");
+}
+
+#[test]
+fn retired_weight_and_stickiness_keys_are_ignored() {
+    let config = CONFIG.replace(
+        "dir = \"~/.claude-angel2\"\n",
+        "dir = \"~/.claude-angel2\"\nweight = 100\n",
+    ) + "\n[pick]\nstickiness = 50\n";
+    let fx = Fixture::new(&config);
+    let tier = json!({"oauthAccount": {"organizationType": "claude_max", "organizationRateLimitTier": "default_claude_max_20x"}});
+    fx.claude_json(".claude-angel2", tier);
+    fx.cache("main", usage(60.0, 0.0));
+    assert_eq!(active(&fx, &[]), "main");
+    let out = fx.ccx(&["manage", "doctor"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    for key in ["accounts.angel2.weight", "pick.stickiness"] {
+        assert!(
+            stdout.contains(&format!(
+                "INFO  config: {key} is no longer used; ccx fills accounts in order. You can remove it"
+            )),
+            "{stdout}"
+        );
+    }
 }
 
 #[test]
@@ -247,38 +265,36 @@ fn cached_usage_utilization_is_the_fallback() {
 }
 
 #[test]
-fn the_last_account_stays_when_it_is_near_the_best() {
+fn the_last_account_does_not_stay() {
     let fx = Fixture::new(CONFIG);
-    fx.cache("main", usage(0.0, 0.0));
-    fx.cache("angel2", usage(8.0, 0.0));
-    assert_eq!(active(&fx, &[]), "main");
-    let state = fx.state();
-    fs::write(&state, r#"{"last": "angel2"}"#).unwrap();
-    assert_eq!(active(&fx, &[]), "angel2");
-    // A difference of more than 10 points changes the account.
-    fx.cache("angel2", usage(11.0, 0.0));
+    fx.cache("main", usage(80.0, 0.0));
+    fx.cache("angel2", usage(0.0, 0.0));
+    fs::create_dir_all(fx.state().parent().unwrap()).unwrap();
+    fs::write(fx.state(), r#"{"last": "angel2"}"#).unwrap();
     assert_eq!(active(&fx, &[]), "main");
 }
 
 #[test]
 fn a_matched_scoped_limit_avoids_the_account() {
     let fx = Fixture::new(CONFIG);
-    fx.cache("main", usage(50.0, 0.0));
     fx.cache(
-        "angel2",
+        "main",
         json!([
             {"kind": "session", "percent": 0, "resets_at": null, "scope": null},
             {"kind": "weekly_scoped", "percent": 99, "resets_at": LATER, "scope": "Opus"},
         ]),
     );
-    assert_eq!(active(&fx, &[]), "angel2");
-    assert_eq!(active(&fx, &["--model", "claude-opus-4"]), "main");
-    assert_eq!(active(&fx, &["--model=sonnet"]), "angel2");
-    // The `model` in settings.json applies when there is no `--model`.
-    let settings = fx.home().join(".claude-angel2/settings.json");
-    fs::create_dir_all(settings.parent().unwrap()).unwrap();
-    fs::write(&settings, r#"{"model": "opus"}"#).unwrap();
+    fx.cache("angel2", usage(50.0, 0.0));
     assert_eq!(active(&fx, &[]), "main");
+    assert_eq!(active(&fx, &["--model", "claude-opus-4"]), "angel2");
+    assert_eq!(active(&fx, &["--model=sonnet"]), "main");
+    // The `model` in settings.json applies when there is no `--model`.
+    fs::write(
+        fx.home().join(".claude/settings.json"),
+        r#"{"model": "opus"}"#,
+    )
+    .unwrap();
+    assert_eq!(active(&fx, &[]), "angel2");
 }
 
 #[test]
