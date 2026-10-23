@@ -2,7 +2,7 @@
 
 ccx is a command-line tool for more than one Claude Code account, such as a personal Max account and a work account. Each account has its own configuration directory. ccx reads the usage of each account and selects the account with the most usage available, or the account that you name. It sets `CLAUDE_CONFIG_DIR` for that account (not for the base account `~/.claude`) and starts `claude`.
 
-> **Status:** Version 0.1.2. All the commands and features in the [Documentation](#documentation) table are available. Refer to [PLAN.md](PLAN.md) for the project history.
+> **Status:** Version 0.1.3. All the commands and features in the [Documentation](#documentation) table are available. Refer to [PLAN.md](PLAN.md) for the project history.
 
 ## Credential policy
 
