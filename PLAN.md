@@ -68,6 +68,7 @@ The GitHub issue is the specification for each step. All issues in this table ar
 - [ADR 0012](docs/adr/0012-no-direct-usage-api.md): ccx does not call `/api/oauth/usage` directly (decision D6). That call needs the OAuth token, and ccx never reads credentials (ADR 0002).
 - [ADR 0013](docs/adr/0013-session-limit-awareness.md): `ccx @name` warns about a limited account, running sessions share the score of an account, and a usage-limit hit at the end of a transcript limits the account until the reset.
 - [ADR 0014](docs/adr/0014-fill-accounts-in-order.md): ccx fills the accounts in a fixed order (the base account, then by name, then API-key accounts). It does not balance the usage. The `weight` and `pick.stickiness` keys are retired.
+- [ADR 0015](docs/adr/0015-sync-rules-and-runtime-items.md): sync shares `rules/` and never shares `transcripts/`, `daemon.lock` and `daemon.status.json`. `[sync]` lists that name these items still load.
 
 ## Design decisions
 

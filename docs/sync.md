@@ -12,11 +12,11 @@ ccx manage sync --all -y           # Ask no questions.
 
 ## What sync shares
 
-- One link each: `settings.json`, `CLAUDE.md`, `keybindings.json`, `statusline.py`, `agents/`, `commands/`, `output-styles/`, `plugins/` and each item in `[sync] share`.
+- One link each: `settings.json`, `CLAUDE.md`, `keybindings.json`, `statusline.py`, `agents/`, `commands/`, `output-styles/`, `plugins/`, `rules/` and each item in `[sync] share`.
 - `skills/`: a real directory, with one link for each base skill. Sync never links `skills/synced`.
-- Never shared: identity files, credentials, sessions, history and dotfiles.
+- Never shared: identity files, credentials, sessions, history, transcripts, the daemon files and dotfiles.
 
-[ADR 0008](adr/0008-sync-share-lists.md) has the full lists.
+[ADR 0008](adr/0008-sync-share-lists.md) has the full lists. [ADR 0015](adr/0015-sync-rules-and-runtime-items.md) added `rules/` and the daemon and transcript items.
 
 > **Known risk:** `plugins/` is one link, so all accounts share `plugins/synced`. To keep `plugins/` separate, put `"plugins"` in `own`.
 
@@ -40,6 +40,8 @@ ccx manage sync --all -y           # Ask no questions.
 ## Unknown items
 
 On a terminal, sync first asks: "Select the items to share with all accounts (the others are not shared)". It writes the selected items to `[sync] share` and the others to `[sync] ignore` in `config.toml`, then continues. The write keeps comments and follows a symbolic link. Sync does not ask again about an item in `share` or `ignore`. To change your answer, edit `[sync]`.
+
+A `[sync]` list can name an item that a ccx release put into a built-in group later, for example `rules`. The config still loads, and doctor shows an INFO line. `rules` in `ignore` stays not shared. A never-share item in `share` is not shared.
 
 With `--dry-run`, `-y` or no terminal, sync does not ask. It shows the `UNKNOWN` items and does not change `config.toml`.
 

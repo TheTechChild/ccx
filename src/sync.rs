@@ -23,7 +23,7 @@ use crate::env::Env;
 use crate::wizard::{Prompt, Stop, Terminal};
 
 /// Top-level items that sync links as one item.
-pub const SHARED: [&str; 8] = [
+pub const SHARED: [&str; 9] = [
     "settings.json",
     "CLAUDE.md",
     "keybindings.json",
@@ -32,6 +32,7 @@ pub const SHARED: [&str; 8] = [
     "commands",
     "output-styles",
     "plugins",
+    "rules",
 ];
 
 /// The skills directory. It is a real directory in each account, with one
@@ -44,7 +45,7 @@ pub const SKILLS_SYNCED: &str = "synced";
 
 /// Top-level items that sync never shares. All dotfiles are also in this
 /// group.
-pub const NEVER: [&str; 26] = [
+pub const NEVER: [&str; 29] = [
     "projects",
     "history.jsonl",
     "file-history",
@@ -69,11 +70,19 @@ pub const NEVER: [&str; 26] = [
     "daemon.log",
     "downloads",
     "feedback",
+    "transcripts",
+    "daemon.lock",
+    "daemon.status.json",
     // Dotfiles, also listed here so that the list is complete.
     ".claude.json",
     ".credentials.json",
     ".claude.json.lock",
 ];
+
+/// Items that ccx v0.2.0 showed as unknown and a later release put into a
+/// built-in group (#72). A `[sync]` list can still name them, so that a
+/// config written before the change still loads.
+pub const MOVED: [&str; 4] = ["rules", "transcripts", "daemon.lock", "daemon.status.json"];
 
 /// The backup directory in each account.
 pub const BACKUP_DIR: &str = ".ccx-backup";
@@ -102,11 +111,16 @@ pub fn classify(name: &str) -> Class {
 
 /// Puts a top-level entry of the base directory into its group, with the
 /// `[sync]` lists of the config. A `share` entry is shared. An `ignore`
-/// entry is never shared and is not unknown.
+/// entry is never shared and is not unknown. A `MOVED` item keeps its
+/// built-in group, but a shared `MOVED` item in `ignore` is not shared:
+/// the user chose that before the item became a shared item (#72).
 pub fn classify_with(name: &str, lists: &SyncLists) -> Class {
+    let ignored = lists.ignore.iter().any(|n| n == name);
     match classify(name) {
+        // The user chose not to share it before it became a shared item.
+        Class::Shared if ignored && MOVED.contains(&name) => Class::Never,
         Class::Unknown if lists.share.iter().any(|n| n == name) => Class::Shared,
-        Class::Unknown if lists.ignore.iter().any(|n| n == name) => Class::Never,
+        Class::Unknown if ignored => Class::Never,
         class => class,
     }
 }
@@ -116,6 +130,8 @@ pub fn classify_with(name: &str, lists: &SyncLists) -> Class {
 pub fn check_list_name(name: &str) -> std::result::Result<(), &'static str> {
     if name.is_empty() || name.contains('/') || matches!(name, "." | "..") {
         Err("is not a top-level entry name")
+    } else if MOVED.contains(&name) {
+        Ok(())
     } else if name.starts_with('.') || NEVER.contains(&name) {
         Err("is on the never-share list")
     } else if SHARED.contains(&name) || name == SKILLS {
@@ -968,6 +984,62 @@ mod tests {
         ] {
             assert_eq!(check_list_name(bad), Err(why), "{bad}");
         }
+    }
+
+    #[test]
+    fn moved_items_are_in_a_built_in_group_and_lists_can_name_them() {
+        assert_eq!(classify("rules"), Class::Shared);
+        for name in ["transcripts", "daemon.lock", "daemon.status.json"] {
+            assert_eq!(classify(name), Class::Never, "{name}");
+        }
+        // A config written before #72 can still name them.
+        for name in MOVED {
+            assert_eq!(check_list_name(name), Ok(()), "{name}");
+        }
+        assert!(valid_own("rules", &[]));
+    }
+
+    #[test]
+    fn moved_items_follow_the_lists_of_older_configs() {
+        let t = Tree::new();
+        for name in ["rules/a.md", "transcripts/s.jsonl"] {
+            write(&t.base().join(name), "x");
+        }
+        for name in ["daemon.lock", "daemon.status.json"] {
+            write(&t.base().join(name), "{}");
+        }
+        // No lists: rules is linked, the runtime items are not shown.
+        let plan = t.plan(&[]);
+        assert_eq!(action(&plan, "rules"), Action::Link);
+        assert_eq!(
+            item(&plan, "rules").want,
+            Want::Link(t.base().join("rules"))
+        );
+        assert!(plan.unknown.is_empty(), "{:?}", plan.unknown);
+        assert_eq!(plan.items.len(), 1);
+
+        // The lists of a config that used the workaround: no change.
+        let workaround = SyncLists {
+            share: vec!["rules".into()],
+            ignore: vec![
+                "daemon.lock".into(),
+                "daemon.status.json".into(),
+                "transcripts".into(),
+            ],
+        };
+        let plan = super::plan(&t.base(), &t.acct(), &[], &workaround).unwrap();
+        assert_eq!(action(&plan, "rules"), Action::Link);
+        assert_eq!(plan.items.len(), 1);
+
+        // rules in ignore stays not shared. A never-share item in share
+        // is never shared.
+        let opposite = SyncLists {
+            share: vec!["transcripts".into(), "daemon.lock".into()],
+            ignore: vec!["rules".into()],
+        };
+        let plan = super::plan(&t.base(), &t.acct(), &[], &opposite).unwrap();
+        assert!(plan.items.is_empty(), "{:#?}", plan.items);
+        assert!(plan.unknown.is_empty(), "{:?}", plan.unknown);
     }
 
     #[test]

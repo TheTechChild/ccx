@@ -862,6 +862,18 @@ mod tests {
     }
 
     #[test]
+    fn sync_lists_can_name_moved_items() {
+        let config = parse_ok(&format!(
+            "{MINIMAL}\n[sync]\nshare = [\"rules\"]\nignore = [\"daemon.lock\", \"daemon.status.json\", \"transcripts\"]\n"
+        ));
+        assert_eq!(config.sync.share, ["rules"]);
+        let config = parse_ok(&format!(
+            "{MINIMAL}\n[sync]\nshare = [\"transcripts\"]\nignore = [\"rules\"]\n"
+        ));
+        assert_eq!(config.sync.ignore, ["rules"]);
+    }
+
+    #[test]
     fn own_can_name_a_share_item() {
         let text = "\n[accounts.work]\ndir = \"~/.claude-work\"\nown = [\"notes\"]\n";
         let e = parse_err(&format!("{MINIMAL}{text}"));

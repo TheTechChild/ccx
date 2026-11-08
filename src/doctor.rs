@@ -146,6 +146,7 @@ pub fn check_all(env: &Env) -> Vec<Finding> {
     if base.dir.is_dir() {
         out.push(check_stray(base, home));
         out.extend(check_unknown(base, &config.sync, home));
+        out.extend(check_moved(&config.sync));
         out.extend(check_accounts(&config));
     }
     out.extend(check_home_paths(&config, home));
@@ -318,6 +319,34 @@ fn check_unknown(base: &Account, lists: &SyncLists, home: &OsStr) -> Vec<Finding
         return vec![ok("unknown", format!("no unknown entries in {shown}"))];
     }
     found
+}
+
+/// `[sync]` entries that name an item that a ccx release put into a
+/// built-in group (#72). They are INFO: the config works, but the entry is
+/// not necessary, or the built-in group overrides it.
+fn check_moved(lists: &SyncLists) -> Vec<Finding> {
+    let mut out = Vec::new();
+    for (key, names) in [("share", &lists.share), ("ignore", &lists.ignore)] {
+        for name in names.iter().filter(|n| sync::MOVED.contains(&n.as_str())) {
+            let shared = sync::classify(name) == sync::Class::Shared;
+            let message = match (key, shared) {
+                ("share", true) => {
+                    format!("sync.share: {name} is now a built-in shared item; you can remove it")
+                }
+                ("share", false) => format!(
+                    "sync.share: {name} is now on the never-share list, so sync does not share it; remove it"
+                ),
+                (_, true) => format!(
+                    "sync.ignore: {name} is now a built-in shared item; sync.ignore keeps it not shared. To share it, remove it"
+                ),
+                (_, false) => {
+                    format!("sync.ignore: {name} is now on the never-share list; you can remove it")
+                }
+            };
+            out.push(info("config", message));
+        }
+    }
+    out
 }
 
 /// Link health and local-only skills of each account other than the base.
@@ -854,6 +883,34 @@ attributes:
         assert_eq!(
             orphans(&names, &accounts),
             vec!["Claude Code-credentials-0badf00d"]
+        );
+    }
+
+    #[test]
+    fn moved_list_entries_are_info() {
+        assert!(check_moved(&SyncLists::default()).is_empty());
+        let lists = SyncLists {
+            share: vec!["rules".into(), "notes".into(), "transcripts".into()],
+            ignore: vec!["daemon.lock".into(), "cache.json".into()],
+        };
+        let found = check_moved(&lists);
+        let messages: Vec<_> = found.iter().map(|f| f.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            [
+                "sync.share: rules is now a built-in shared item; you can remove it",
+                "sync.share: transcripts is now on the never-share list, so sync does not share it; remove it",
+                "sync.ignore: daemon.lock is now on the never-share list; you can remove it",
+            ]
+        );
+        assert!(found.iter().all(|f| f.level == Level::Info));
+        let ignored = SyncLists {
+            share: vec![],
+            ignore: vec!["rules".into()],
+        };
+        assert_eq!(
+            check_moved(&ignored)[0].message,
+            "sync.ignore: rules is now a built-in shared item; sync.ignore keeps it not shared. To share it, remove it"
         );
     }
 
