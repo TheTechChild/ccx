@@ -891,7 +891,11 @@ attributes:
         assert!(check_moved(&SyncLists::default()).is_empty());
         let lists = SyncLists {
             share: vec!["rules".into(), "notes".into(), "transcripts".into()],
-            ignore: vec!["daemon.lock".into(), "cache.json".into()],
+            ignore: vec![
+                "daemon.lock".into(),
+                "cache.json".into(),
+                "README.md".into(),
+            ],
         };
         let found = check_moved(&lists);
         let messages: Vec<_> = found.iter().map(|f| f.message.as_str()).collect();
@@ -901,6 +905,7 @@ attributes:
                 "sync.share: rules is now a built-in shared item; you can remove it",
                 "sync.share: transcripts is now on the never-share list, so sync does not share it; remove it",
                 "sync.ignore: daemon.lock is now on the never-share list; you can remove it",
+                "sync.ignore: README.md is now on the never-share list; you can remove it",
             ]
         );
         assert!(found.iter().all(|f| f.level == Level::Info));

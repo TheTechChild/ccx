@@ -4,6 +4,7 @@
 - **Date:** 2026-10-12
 - **Issue:** #7
 - **Changed by:** [ADR 0015](0015-sync-rules-and-runtime-items.md) (`rules/` is shared; `transcripts/`, `daemon.lock` and `daemon.status.json` are never shared)
+- **Changed by:** [ADR 0016](0016-sync-never-shares-readme.md) (`README.md` is never shared)
 
 ## Context
 

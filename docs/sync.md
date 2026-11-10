@@ -14,9 +14,9 @@ ccx manage sync --all -y           # Ask no questions.
 
 - One link each: `settings.json`, `CLAUDE.md`, `keybindings.json`, `statusline.py`, `agents/`, `commands/`, `output-styles/`, `plugins/`, `rules/` and each item in `[sync] share`.
 - `skills/`: a real directory, with one link for each base skill. Sync never links `skills/synced`.
-- Never shared: identity files, credentials, sessions, history, transcripts, the daemon files and dotfiles.
+- Never shared: identity files, credentials, sessions, history, transcripts, the daemon files, `README.md` and dotfiles.
 
-[ADR 0008](adr/0008-sync-share-lists.md) has the full lists. [ADR 0015](adr/0015-sync-rules-and-runtime-items.md) added `rules/` and the daemon and transcript items.
+[ADR 0008](adr/0008-sync-share-lists.md) has the full lists. [ADR 0015](adr/0015-sync-rules-and-runtime-items.md) added `rules/` and the daemon and transcript items. [ADR 0016](adr/0016-sync-never-shares-readme.md) added `README.md` to the never-share list.
 
 > **Known risk:** `plugins/` is one link, so all accounts share `plugins/synced`. To keep `plugins/` separate, put `"plugins"` in `own`.
 

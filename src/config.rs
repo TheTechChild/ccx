@@ -871,6 +871,9 @@ mod tests {
             "{MINIMAL}\n[sync]\nshare = [\"transcripts\"]\nignore = [\"rules\"]\n"
         ));
         assert_eq!(config.sync.ignore, ["rules"]);
+        // A config that ignored README.md before #74 still loads.
+        let config = parse_ok(&format!("{MINIMAL}\n[sync]\nignore = [\"README.md\"]\n"));
+        assert_eq!(config.sync.ignore, ["README.md"]);
     }
 
     #[test]

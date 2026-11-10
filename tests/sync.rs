@@ -211,7 +211,6 @@ fn sync_on_the_real_layout_adds_skill_links_and_keeps_correct_links() {
     assert_eq!(
         unknown,
         [
-            "README.md (not shared)",
             "gh-pr-status-cache.json (not shared)",
             "settings.json.bak-ultracode (not shared)",
         ]
