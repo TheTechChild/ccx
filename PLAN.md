@@ -69,6 +69,7 @@ The GitHub issue is the specification for each step. All issues in this table ar
 - [ADR 0013](docs/adr/0013-session-limit-awareness.md): `ccx @name` warns about a limited account, running sessions share the score of an account, and a usage-limit hit at the end of a transcript limits the account until the reset.
 - [ADR 0014](docs/adr/0014-fill-accounts-in-order.md): ccx fills the accounts in a fixed order (the base account, then by name, then API-key accounts). It does not balance the usage. The `weight` and `pick.stickiness` keys are retired.
 - [ADR 0015](docs/adr/0015-sync-rules-and-runtime-items.md): sync shares `rules/` and never shares `transcripts/`, `daemon.lock` and `daemon.status.json`. `[sync]` lists that name these items still load.
+- [ADR 0016](docs/adr/0016-sync-never-shares-readme.md): sync never shares `README.md`, and sync and doctor do not show it as unknown. `[sync]` lists that name it still load.
 
 ## Design decisions
 

@@ -45,7 +45,7 @@ pub const SKILLS_SYNCED: &str = "synced";
 
 /// Top-level items that sync never shares. All dotfiles are also in this
 /// group.
-pub const NEVER: [&str; 29] = [
+pub const NEVER: [&str; 30] = [
     "projects",
     "history.jsonl",
     "file-history",
@@ -73,6 +73,8 @@ pub const NEVER: [&str; 29] = [
     "transcripts",
     "daemon.lock",
     "daemon.status.json",
+    // The README of a git repo that holds the base dir (#74).
+    "README.md",
     // Dotfiles, also listed here so that the list is complete.
     ".claude.json",
     ".credentials.json",
@@ -80,9 +82,15 @@ pub const NEVER: [&str; 29] = [
 ];
 
 /// Items that ccx v0.2.0 showed as unknown and a later release put into a
-/// built-in group (#72). A `[sync]` list can still name them, so that a
+/// built-in group (#72, #74). A `[sync]` list can still name them, so that a
 /// config written before the change still loads.
-pub const MOVED: [&str; 4] = ["rules", "transcripts", "daemon.lock", "daemon.status.json"];
+pub const MOVED: [&str; 5] = [
+    "rules",
+    "transcripts",
+    "daemon.lock",
+    "daemon.status.json",
+    "README.md",
+];
 
 /// The backup directory in each account.
 pub const BACKUP_DIR: &str = ".ccx-backup";
@@ -942,7 +950,7 @@ mod tests {
         for name in ["chrome", "daemon.log", "downloads", "feedback"] {
             assert_eq!(classify(name), Class::Never, "{name}");
         }
-        for name in ["new-dir", "README.md", "settings.json.bak"] {
+        for name in ["new-dir", "notes.md", "settings.json.bak"] {
             assert_eq!(classify(name), Class::Unknown, "{name}");
         }
     }
@@ -989,7 +997,12 @@ mod tests {
     #[test]
     fn moved_items_are_in_a_built_in_group_and_lists_can_name_them() {
         assert_eq!(classify("rules"), Class::Shared);
-        for name in ["transcripts", "daemon.lock", "daemon.status.json"] {
+        for name in [
+            "transcripts",
+            "daemon.lock",
+            "daemon.status.json",
+            "README.md",
+        ] {
             assert_eq!(classify(name), Class::Never, "{name}");
         }
         // A config written before #72 can still name them.
@@ -1040,6 +1053,31 @@ mod tests {
         let plan = super::plan(&t.base(), &t.acct(), &[], &opposite).unwrap();
         assert!(plan.items.is_empty(), "{:#?}", plan.items);
         assert!(plan.unknown.is_empty(), "{:?}", plan.unknown);
+    }
+
+    #[test]
+    fn readme_is_never_shared_and_not_unknown() {
+        let t = Tree::new();
+        write(&t.base().join("README.md"), "# config");
+        // No lists: README.md is not linked and is not unknown.
+        let plan = t.plan(&[]);
+        assert!(plan.items.is_empty(), "{:#?}", plan.items);
+        assert!(plan.unknown.is_empty(), "{:?}", plan.unknown);
+        // README.md in share or ignore: it is never shared.
+        for lists in [
+            SyncLists {
+                share: vec!["README.md".into()],
+                ignore: vec![],
+            },
+            SyncLists {
+                share: vec![],
+                ignore: vec!["README.md".into()],
+            },
+        ] {
+            let plan = super::plan(&t.base(), &t.acct(), &[], &lists).unwrap();
+            assert!(plan.items.is_empty(), "{:#?}", plan.items);
+            assert!(plan.unknown.is_empty(), "{:?}", plan.unknown);
+        }
     }
 
     #[test]
@@ -1275,7 +1313,7 @@ mod tests {
             "settings.json",
             "history.jsonl",
             ".claude.json",
-            "README.md",
+            "notes.md",
             "daemon.log",
         ] {
             write(&base.join(name), "x");
@@ -1284,7 +1322,7 @@ mod tests {
             fs::create_dir(base.join(name)).unwrap();
         }
         let plan = t.plan(&[]);
-        assert_eq!(plan.unknown, ["README.md", "new-dir"]);
+        assert_eq!(plan.unknown, ["new-dir", "notes.md"]);
         let paths: Vec<_> = plan.items.iter().map(|i| i.path.clone()).collect();
         assert_eq!(
             paths,
